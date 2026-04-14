@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TABLE IF NOT EXISTS event_metadata (
     event_id     TEXT PRIMARY KEY,
     tmdb_id      INTEGER NOT NULL,
-    season       INTEGER,
-    ep           INTEGER,
+    season_num   INTEGER,
+    episode_num  INTEGER,
     language     TEXT NOT NULL,
     archive_md5  TEXT,
     FOREIGN KEY(event_id) REFERENCES events(id)
@@ -48,6 +48,6 @@ CREATE TABLE IF NOT EXISTS event_sources (
 );
 
 -- 索引预设
-CREATE INDEX IF NOT EXISTS idx_metadata_lookup ON event_metadata(tmdb_id, season, ep);
+CREATE INDEX IF NOT EXISTS idx_metadata_lookup ON event_metadata(tmdb_id, season_num, episode_num);
 CREATE INDEX IF NOT EXISTS idx_tags_lookup ON event_tags(name, value);
 CREATE INDEX IF NOT EXISTS idx_blobs_created ON blobs(created_at);

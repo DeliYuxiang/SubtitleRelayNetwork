@@ -40,3 +40,4 @@
 *.go
 go.sum
 go.mod
+*.o

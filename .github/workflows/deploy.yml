@@ -3,13 +3,54 @@ name: Deploy SRN Cloudless Relay
 on:
   push:
     branches:
+      - '**'
+  pull_request:
+    branches:
       - main
     paths:
       - 'worker/**'
       - '.github/workflows/deploy.yml'
 
 jobs:
+  lint-format:
+    runs-on: ubuntu-latest
+    name: Code Formatting
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 场景 1: 直接 Push - 信任代码，执行 Full Fix & Sync
+      - name: Full Auto-Fix (On Push)
+        if: github.event_name == 'push'
+        run: |
+          cd worker && npm install && npm run format:fix && cd ..
+          if [ -n "$(git status --porcelain)" ]; then
+            git config --global user.name "github-actions[bot]"
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+            git add .
+            if [ "${{ github.ref_name }}" != "main" ]; then
+              echo "Amending and force-pushing to ${{ github.ref_name }}..."
+              git commit --amend --no-edit
+              git push origin HEAD:${{ github.ref_name }} --force
+            else
+              echo "Main branch: Creating skip-ci commit..."
+              git commit -m "$(git log -1 --pretty=%s) [skip ci]"
+              git push origin main
+            fi
+          fi
+
+      # 场景 2: Pull Request - 安全优先，仅执行 Read-only Check
+      - name: Read-only Check (On PR)
+        if: github.event_name == 'pull_request'
+        run: npx prettier --check "worker/src/**/*.ts"
+
   deploy-or-bootstrap:
+    needs: [lint-format]
+    if: github.event_name == 'push' && github.ref_name == 'main'
     runs-on: ubuntu-latest
     name: Cloudflare Lifecycle
     permissions:
@@ -102,21 +143,16 @@ jobs:
 
       # --- MODE C: Final Sync (Docs) ---
       - name: Update Registry (README & RELAYS)
-        if: success() && steps.check_secrets.outputs.mode == 'deploy'
+        if: success() && steps.check_secrets.outputs.mode == 'deploy' && github.ref_name == 'main'
         run: |
           DEPLOYED_URL="${{ steps.prod_deploy.outputs.deployed_url }}"
           if [ -n "$DEPLOYED_URL" ]; then
             git config --global user.name "github-actions[bot]"
             git config --global user.email "github-actions[bot]@users.noreply.github.com"
-            # 撤销对 wrangler.jsonc 的临时修改，以使工作区变干净，防止 rebase 冲突
-            git checkout worker/wrangler.jsonc
+            git reset --hard
             git pull --rebase origin main
             
-            # 更新 README
             sed -i "s|\[pending deployment\]|$DEPLOYED_URL|g" README.md
-            
-            # 更新 RELAYS.md (包含简单的状态行替换逻辑)
-            # 找到官方节点那一节下面的 Status 行进行替换
             sed -i "/## 官方中继/,/## 社区中继/s|\[pending deployment\]|$DEPLOYED_URL|g" RELAYS.md
             
             git add README.md RELAYS.md

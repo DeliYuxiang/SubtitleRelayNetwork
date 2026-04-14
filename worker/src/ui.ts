@@ -294,4 +294,4 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
     </script>
 </body>
 </html>
-`
+`;

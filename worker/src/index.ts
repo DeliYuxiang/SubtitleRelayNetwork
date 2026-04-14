@@ -1,209 +1,251 @@
-import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { swaggerUI } from '@hono/swagger-ui';
-import { html } from 'hono/html';
-import { renderLandingPage } from './ui';
+import { Hono } from "hono";
+import { swaggerUI } from "@hono/swagger-ui";
+import { renderLandingPage } from "./ui";
 
-interface Env {
+type Bindings = {
   DB: D1Database;
   BUCKET: R2Bucket;
-}
+};
 
-const app = new OpenAPIHono<{ Bindings: Env }>();
+const app = new Hono<{ Bindings: Bindings }>();
 
-// --- UI Portal ---
+// --- UI & Lifecycle ---
 
-app.get('/v1/health', async (c) => {
-  const statsRes = await c.env.DB.prepare("SELECT count(*) as total FROM events").first<{total: number}>();
-  const total = statsRes?.total || 0;
-  
+app.get("/", async (c) => {
+  const statsRes = await c.env.DB.prepare(
+    "SELECT count(*) as total FROM events",
+  ).first<{ total: number }>();
+  return c.html(renderLandingPage({ totalEvents: statsRes?.total || 0 }));
+});
+
+// Restore Swagger & OpenAPI endpoints
+app.get("/ui", swaggerUI({ url: "/doc" }));
+app.get("/doc", (c) => {
   return c.json({
-    schemaVersion: 1,
-    label: "SRN Relay",
-    message: `Online (${total} events)`,
-    color: "success"
+    openapi: "3.0.0",
+    info: { version: "2.0.0", title: "SRN Relay API" },
+    paths: {
+      "/v1/events": {
+        get: {
+          summary: "Search events",
+          parameters: [
+            { name: "tmdb", in: "query", schema: { type: "string" } },
+          ],
+        },
+        post: { summary: "Publish event" },
+      },
+    },
   });
 });
 
-app.get('/', async (c) => {
-  const statsRes = await c.env.DB.prepare("SELECT count(*) as total FROM events").first<{total: number}>();
-  
-  return c.html(renderLandingPage({
-    totalEvents: statsRes?.total || 0
-  }));
+app.get("/v1/health", async (c) => {
+  const statsRes = await c.env.DB.prepare(
+    "SELECT count(*) as total FROM events",
+  ).first<{ total: number }>();
+  return c.json({
+    schemaVersion: 1,
+    label: "SRN Relay",
+    message: `Online (${statsRes?.total || 0} events)`,
+    color: "success",
+  });
 });
 
-// --- Schemas & Routes ---
+// --- Core API ---
 
-const EventParamsSchema = z.object({
-  id: z.string().openapi({ example: '1234567890abcdef...' }),
-});
+// 1. Search (Normalized & Optimized)
+app.get("/v1/events", async (c) => {
+  const { tmdb, season, ep, language, archive_md5 } = c.req.query();
 
-const QueryParamsSchema = z.object({
-  tmdb: z.string().optional().openapi({ example: '100565' }),
-  s: z.string().optional().openapi({ example: '1' }),
-  e: z.string().optional().openapi({ example: '5' }),
-  lang: z.string().optional().openapi({ example: 'zh-CN' }),
-});
+  let query = `
+    SELECT e.*, m.tmdb_id, m.season_num, m.episode_num, m.language, m.archive_md5
+    FROM events e 
+    JOIN event_metadata m ON e.id = m.event_id 
+    WHERE 1=1
+  `;
+  const params: any[] = [];
 
-// --- API Endpoints with OpenAPI Documentation ---
-
-// 1. Query Events
-app.openapi(
-  createRoute({
-    method: 'get',
-    path: '/v1/events',
-    request: { query: QueryParamsSchema },
-    responses: {
-      200: {
-        description: 'Returns a list of matching subtitle events',
-        content: { 'application/json': { schema: z.object({ events: z.array(z.any()) }) } },
-      },
-    },
-    summary: 'Query subtitle metadata',
-  }),
-  async (c) => {
-    const { tmdb, s, e, lang } = c.req.valid('query');
-
-    let query = `
-      SELECT e.*, m.tmdb_id, m.season, m.ep, m.language, m.archive_md5
-      FROM events e
-      JOIN event_metadata m ON e.id = m.event_id
-      WHERE 1=1
-    `;
-    const params: any[] = [];
-
-    if (tmdb) { query += " AND m.tmdb_id = ?"; params.push(parseInt(tmdb)); }
-    if (s) { query += " AND m.season = ?"; params.push(parseInt(s)); }
-    if (e) { query += " AND m.ep = ?"; params.push(parseInt(e)); }
-    if (lang) { query += " AND m.language = ?"; params.push(lang); }
-
-    query += " ORDER BY e.created_at DESC LIMIT 50";
-
-    const { results } = await c.env.DB.prepare(query).bind(...params).all();
-    return c.json({ events: results });
+  if (tmdb) {
+    query += " AND m.tmdb_id = ?";
+    params.push(tmdb);
   }
-);
-
-// 2. Publish Event
-// Note: Zod-OpenAPI doesn't handle multipart as cleanly as JSON, but we define the summary.
-app.post('/v1/events', async (c) => {
-  const formData = await c.req.formData();
-  const eventJson = formData.get('event') as string;
-  const file = formData.get('file') as File;
-
-  if (!eventJson) return c.json({ error: "Missing event" }, 400);
-  const event = JSON.parse(eventJson);
-
-  // Verification
-  const isValid = await verifyEvent(event);
-  if (!isValid) return c.json({ error: "Invalid signature or ID" }, 403);
-
-  const contentMd5 = event.content;
-
-  let blob = await c.env.DB.prepare("SELECT * FROM blobs WHERE content_md5 = ?").bind(contentMd5).first();
-  
-  if (!blob) {
-    if (!file) return c.json({ error: "File required for first-time upload" }, 400);
-    if (file.size > 5 * 1024 * 1024) return c.json({ error: "File too large (Max 5MB)" }, 413);
-
-    const fileBuffer = await file.arrayBuffer();
-    const actualHashBuffer = await crypto.subtle.digest("MD5", fileBuffer);
-    const actualMd5 = Array.from(new Uint8Array(actualHashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-
-    if (actualMd5 !== contentMd5) return c.json({ error: "File content mismatch" }, 400);
-    
-    const r2Key = `subtitles/${contentMd5}`;
-    await c.env.BUCKET.put(r2Key, fileBuffer, {
-      httpMetadata: { contentType: file.type || 'application/octet-stream' }
-    });
-    await c.env.DB.prepare("INSERT INTO blobs (content_md5, r2_key, size, created_at) VALUES (?, ?, ?, ?)")
-      .bind(contentMd5, r2Key, file.size, Math.floor(Date.now() / 1000)).run();
+  if (season) {
+    query += " AND m.season_num = ?";
+    params.push(parseInt(season));
+  }
+  if (ep) {
+    query += " AND m.episode_num = ?";
+    params.push(parseInt(ep));
+  }
+  if (language) {
+    query += " AND m.language = ?";
+    params.push(language);
+  }
+  if (archive_md5) {
+    query += " AND m.archive_md5 = ?";
+    params.push(archive_md5);
   }
 
+  query += " ORDER BY e.created_at DESC LIMIT 100";
+
+  const { results } = await c.env.DB.prepare(query)
+    .bind(...params)
+    .all();
+  return c.json({ events: results });
+});
+
+// 2. Download (Schema-Aware)
+app.get("/v1/events/:id/content", async (c) => {
+  const eventId = c.req.param("id");
+
+  // Find the R2 key associated with this event via content_md5
+  const blobInfo = await c.env.DB.prepare(
+    `
+    SELECT b.r2_key 
+    FROM events e 
+    JOIN blobs b ON e.content_md5 = b.content_md5 
+    WHERE e.id = ?
+  `,
+  )
+    .bind(eventId)
+    .first<{ r2_key: string }>();
+
+  if (!blobInfo)
+    return c.json({ error: "Event not found or associated blob missing" }, 404);
+
+  const object = await c.env.BUCKET.get(blobInfo.r2_key);
+  if (!object) return c.json({ error: "R2 object missing" }, 404);
+
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("etag", object.httpEtag);
+
+  return new Response(object.body, { headers });
+});
+
+// 3. Publish (Authenticated & Validated)
+app.post("/v1/events", async (c) => {
+  const pubKeyHex = c.req.header("X-SRN-PubKey");
+  const signatureHex = c.req.header("X-SRN-Signature");
+  if (!pubKeyHex || !signatureHex)
+    return c.json({ error: "Missing auth headers" }, 401);
+
+  const formData = await c.req.parseBody();
+  const eventJsonStr = formData.event as string;
+  const file = formData.file as File;
+
+  if (!eventJsonStr || !file) return c.json({ error: "Missing payload" }, 400);
+  if (file.size > 5 * 1024 * 1024)
+    return c.json({ error: "File too large (max 5MB)" }, 413);
+
+  let eventObj: any;
   try {
-    await c.env.DB.prepare("INSERT INTO events (id, pubkey, kind, content_md5, tags, sig, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .bind(event.id, event.pubkey, event.kind, contentMd5, JSON.stringify(event.tags), event.sig, event.created_at).run();
-
-    const tags = event.tags as string[][];
-    const tmdb = tags.find(t => t[0] === 'tmdb')?.[1];
-    const s = tags.find(t => t[0] === 's')?.[1];
-    const e = tags.find(t => t[0] === 'e')?.[1];
-    const lang = tags.find(t => t[0] === 'language' || t[0] === 'lang')?.[1];
-    const archive = tags.find(t => t[0] === 'archive_md5')?.[1];
-
-    if (tmdb) {
-        await c.env.DB.prepare("INSERT INTO event_metadata (event_id, tmdb_id, season, ep, language, archive_md5) VALUES (?, ?, ?, ?, ?, ?)")
-            .bind(event.id, parseInt(tmdb), s ? parseInt(s) : null, e ? parseInt(e) : null, lang || 'und', archive || null).run();
-    }
-
-    for (const tag of tags) {
-        if (['tmdb', 's', 'e', 'language', 'lang', 'content_md5', 'archive_md5'].includes(tag[0])) continue;
-        await c.env.DB.prepare("INSERT INTO event_tags (event_id, name, value) VALUES (?, ?, ?)")
-            .bind(event.id, tag[0], tag[1]).run();
-    }
-    return c.json({ id: event.id, status: "created" }, 201);
-  } catch (err: any) {
-    if (err.message?.includes("UNIQUE")) return c.json({ id: event.id, status: "exists" }, 200);
-    return c.json({ error: err.message }, 500);
+    eventObj = JSON.parse(eventJsonStr);
+  } catch (e) {
+    return c.json({ error: "Invalid event JSON" }, 400);
   }
-});
 
-// 3. Get Content
-app.openapi(
-  createRoute({
-    method: 'get',
-    path: '/v1/events/{id}/content',
-    request: { params: EventParamsSchema },
-    responses: {
-      200: { description: 'The subtitle file binary' },
-      404: { description: 'Event or file not found' }
-    },
-    summary: 'Download subtitle file'
-  }),
-  async (c) => {
-    const { id } = c.req.valid('param');
-    const event = await c.env.DB.prepare("SELECT content_md5 FROM events WHERE id = ?").bind(id).first<{content_md5: string}>();
-    if (!event) return c.text("Event not found", 404);
-
-    const blob = await c.env.DB.prepare("SELECT r2_key FROM blobs WHERE content_md5 = ?").bind(event.content_md5).first<{r2_key: string}>();
-    if (!blob) return c.text("Blob not found", 404);
-
-    const object = await c.env.BUCKET.get(blob.r2_key);
-    if (!object) return c.text("Object not found in R2", 404);
-
-    const headers = new Headers();
-    object.writeHttpMetadata(headers);
-    headers.set("Access-Control-Allow-Origin", "*");
-    return new Response(object.body, { headers });
-  }
-);
-
-// --- OpenAPI Doc & UI ---
-
-app.doc('/doc', {
-  openapi: '3.0.0',
-  info: { title: 'SRN Relay API', version: '2.0.0' },
-});
-
-app.get('/ui', swaggerUI({ url: '/doc' }));
-
-// --- Verification Helper ---
-
-async function verifyEvent(event: any): Promise<boolean> {
+  // --- CRYPTO VERIFICATION ---
   try {
-    const canonical = [event.pubkey, event.created_at, event.kind, event.tags, event.filename, event.content];
-    const data = JSON.stringify(canonical);
-    const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(data));
-    const hashHex = Array.from(new Uint8Array(hashBuffer)).slice(0, 16).map(b => b.toString(16).padStart(2, '0')).join('');
-    if (event.id !== hashHex) return false;
+    const encoder = new TextEncoder();
+    const publicKey = await crypto.subtle.importKey(
+      "raw",
+      new Uint8Array(
+        pubKeyHex.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16)),
+      ),
+      { name: "NODE-ED25519", namedCurve: "NODE-ED25519" },
+      true,
+      ["verify"],
+    );
+    const verified = await crypto.subtle.verify(
+      "NODE-ED25519",
+      publicKey,
+      new Uint8Array(
+        signatureHex.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16)),
+      ),
+      encoder.encode(eventJsonStr),
+    );
+    if (!verified) throw new Error("Sig mismatch");
+  } catch (err) {
+    return c.json({ error: "Signature verification failed" }, 401);
+  }
 
-    const pubKey = await crypto.subtle.importKey("raw", byteToUint8Array(event.pubkey), { name: "Ed25519", namedCurve: "Ed25519" }, true, ["verify"]);
-    return await crypto.subtle.verify("Ed25519", pubKey, byteToUint8Array(event.sig), byteToUint8Array(event.id));
-  } catch { return false; }
-}
+  const contentArrayBuffer = await file.arrayBuffer();
+  const contentHashBuffer = await crypto.subtle.digest(
+    "MD5",
+    contentArrayBuffer,
+  );
+  const contentMd5 = Array.from(new Uint8Array(contentHashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 
-function byteToUint8Array(hex: string) {
-  return Uint8Array.from(hex.match(/.{1,2}/g)!.map(b => parseInt(b, 16)));
-}
+  if (contentMd5 !== eventObj.content_md5) {
+    return c.json({ error: "Content hash mismatch" }, 400);
+  }
+
+  // --- STORAGE (Transparent Compression) ---
+  const r2Key = `v1/${contentMd5}.gz`;
+  const compressionStream = file
+    .stream()
+    .pipeThrough(new CompressionStream("gzip"));
+  await c.env.BUCKET.put(r2Key, compressionStream, {
+    httpMetadata: {
+      contentType: file.type || "text/plain",
+      contentEncoding: "gzip",
+      contentDisposition: `attachment; filename="${file.name}"`,
+    },
+  });
+
+  // --- DATABASE (Transactional Flow) ---
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    await c.env.DB.batch([
+      // 1. Ensure blob entry exists
+      c.env.DB.prepare(
+        `
+        INSERT OR IGNORE INTO blobs (content_md5, r2_key, size, created_at)
+        VALUES (?, ?, ?, ?)
+      `,
+      ).bind(contentMd5, r2Key, file.size, now),
+
+      // 2. Insert main event
+      c.env.DB.prepare(
+        `
+        INSERT INTO events (id, pubkey, kind, content_md5, tags, sig, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+      ).bind(
+        eventObj.id,
+        pubKeyHex,
+        eventObj.kind || 1,
+        contentMd5,
+        JSON.stringify(eventObj.tags || []),
+        signatureHex,
+        now,
+      ),
+
+      // 3. Insert metadata
+      c.env.DB.prepare(
+        `
+        INSERT INTO event_metadata (event_id, tmdb_id, season_num, episode_num, language, archive_md5)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `,
+      ).bind(
+        eventObj.id,
+        eventObj.tmdb_id,
+        eventObj.season_num || 0,
+        eventObj.episode_num || 0,
+        eventObj.language || "und",
+        eventObj.archive_md5 || "",
+      ),
+    ]);
+  } catch (dbErr: any) {
+    return c.json(
+      { error: "Database conflict or storage error", details: dbErr.message },
+      409,
+    );
+  }
+
+  return c.json({ success: true, id: eventObj.id });
+});
 
 export default app;

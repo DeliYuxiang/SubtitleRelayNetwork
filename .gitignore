@@ -1,0 +1,42 @@
+# Go
+/deploy
+/srn
+/migrate
+/keygen
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Data
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Cloudflare Worker
+/worker/node_modules/
+/worker/dist/
+/worker/.wrangler/
+/worker/.dev.vars
+/worker/.env
+/worker/.env.test
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+
+# Project specific
+/artifacts/
+/scratch/
+
+.env*
+*.go
+go.sum
+go.mod

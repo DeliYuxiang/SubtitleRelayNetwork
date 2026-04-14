@@ -50,7 +50,7 @@ jobs:
 
   deploy-or-bootstrap:
     needs: [lint-format]
-    if: github.event_name == 'push' && github.ref_name == 'main'
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_name == 'main')
     runs-on: ubuntu-latest
     name: Cloudflare Lifecycle
     permissions:
@@ -87,6 +87,9 @@ jobs:
           sed -i "s/srn-d1-name-placeholder/${{ secrets.SRN_D1_NAME }}/g" wrangler.jsonc
           sed -i "s/srn-d1-id-placeholder/${{ secrets.SRN_D1_ID }}/g" wrangler.jsonc
           sed -i "s/srn-r2-name-placeholder/${{ secrets.SRN_R2_NAME }}/g" wrangler.jsonc
+          
+          # Apply database migrations before deployment
+          npx wrangler d1 migrations apply ${{ secrets.SRN_D1_NAME }} --remote --yes
           
           DEPLOY_OUTPUT=$(npx wrangler deploy)
           echo "$DEPLOY_OUTPUT"
@@ -125,7 +128,7 @@ jobs:
           sed -i "s/srn-d1-id-placeholder/$D1_ID/g" wrangler.jsonc
           sed -i "s/srn-r2-name-placeholder/$R2_NAME/g" wrangler.jsonc
           
-          npx wrangler d1 execute $DB_NAME --file=./schema.sql --remote &>/dev/null
+          npx wrangler d1 migrations apply $DB_NAME --remote --yes
 
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"

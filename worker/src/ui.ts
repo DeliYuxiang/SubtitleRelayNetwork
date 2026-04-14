@@ -46,9 +46,13 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
         .hero { text-align: center; padding: 4rem 0; }
         .hero h1 { font-size: 3rem; margin-bottom: 1.5rem; }
         
-        .search-box {
+        .search-container {
             max-width: 700px;
             margin: 0 auto 3rem;
+            position: relative;
+        }
+
+        .search-box {
             display: flex;
             background: var(--card-bg);
             border: 1px solid var(--border);
@@ -75,6 +79,32 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
             font-weight: 600;
             cursor: pointer;
         }
+
+        .suggestions {
+            position: absolute;
+            top: calc(100% + 10px);
+            left: 0;
+            right: 0;
+            background: #1a1a20;
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            overflow: hidden;
+            z-index: 50;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+        }
+        .suggestion-item {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 0.75rem 1rem;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .suggestion-item:hover { background: rgba(255,255,255,0.05); }
+        .suggestion-item img { width: 40px; height: 60px; object-fit: cover; border-radius: 4px; }
+        .suggestion-info { flex: 1; }
+        .suggestion-name { font-weight: 600; font-size: 0.95rem; }
+        .suggestion-meta { font-size: 0.8rem; color: #64748b; }
 
         .stats-strip { display: flex; gap: 2rem; justify-content: center; color: #64748b; font-size: 0.9rem; margin-bottom: 4rem; }
         .stat-item b { color: var(--primary); }
@@ -159,9 +189,20 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
         <div class="container">
             <section class="hero" v-if="!results.length && !loading">
                 <h1>寻找你的边缘字幕</h1>
-                <div class="search-box">
-                    <input type="text" v-model="tmdb" @keyup.enter="search" placeholder="输入 TMDB ID (例如 100565)...">
-                    <button @click="search">探索索引</button>
+                <div class="search-container">
+                    <div class="search-box">
+                        <input type="text" v-model="searchInput" @input="onInput" @keyup.enter="onEnter" placeholder="输入影视名称或 TMDB ID...">
+                        <button @click="onEnter">探索索引</button>
+                    </div>
+                    <div class="suggestions" v-if="suggestions.length">
+                        <div v-for="s in suggestions" class="suggestion-item" @click="selectSuggestion(s)">
+                            <img :src="s.poster || 'https://via.placeholder.com/92x138?text=No+Poster'" alt="poster">
+                            <div class="suggestion-info">
+                                <div class="suggestion-name">{{ s.name }}</div>
+                                <div class="suggestion-meta">{{ s.type.toUpperCase() }} • {{ s.year }} • ID: {{ s.id }}</div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <div class="stats-strip">
                     <div class="stat-item">已索引 <b>${stats.totalEvents}</b> 份内容</div>
@@ -171,8 +212,9 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
 
             <section class="results-section" v-if="results.length || loading">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
-                    <h2>搜索结果: TMDB <span style="color: var(--primary);">{{ tmdb }}</span></h2>
-                    <button class="action-btn" style="flex: none; padding: 0.5rem 1.5rem;" @click="results = []; tmdb = '';">重新搜索</button>
+                    <h2 v-if="currentMedia">正在查看: <span style="color: var(--primary);">{{ currentMedia.name }} ({{ currentMedia.year }})</span></h2>
+                    <h2 v-else>搜索结果: TMDB <span style="color: var(--primary);">{{ searchInput }}</span></h2>
+                    <button class="action-btn" style="flex: none; padding: 0.5rem 1.5rem;" @click="reset()">重新搜索</button>
                 </div>
 
                 <div v-if="loading" class="loading-spinner">正在从分布式数据库读取元数据...</div>
@@ -191,7 +233,7 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
 
                         <div class="episodes-list">
                             <div v-for="item in pack.items" class="ep-badge">
-                                S{{ item.season || 0 }}E{{ item.ep || 0 }} ({{ item.language }})
+                                S{{ item.season_num || 0 }}E{{ item.episode_num || 0 }} ({{ item.language }})
                             </div>
                         </div>
 
@@ -205,7 +247,7 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                 </div>
 
                 <div v-else class="empty-state">
-                    没有找到匹配的字幕。试着更换 TMDB ID 再次检索。
+                    没有找到匹配的字幕。试着更换关键词再次检索。
                 </div>
             </section>
         </div>
@@ -220,17 +262,54 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
     <script>
         function initApp() {
             return {
-                tmdb: '',
+                searchInput: '',
                 results: [],
                 loading: false,
                 downloading: null,
+                suggestions: [],
+                currentMedia: null,
                 stats: { totalEvents: ${stats.totalEvents} },
+                debounceTimer: null,
                 
-                async search() {
-                    if (!this.tmdb) return;
-                    this.loading = true;
+                onInput() {
+                    clearTimeout(this.debounceTimer);
+                    if (!this.searchInput || /^[0-9]+$/.test(this.searchInput)) {
+                        this.suggestions = [];
+                        return;
+                    }
+                    this.debounceTimer = setTimeout(() => this.fetchSuggestions(), 300);
+                },
+
+                async fetchSuggestions() {
                     try {
-                        const res = await fetch(\`/v1/events?tmdb=\${this.tmdb}\`);
+                        const res = await fetch(\`/v1/tmdb/search?q=\${encodeURIComponent(this.searchInput)}\`);
+                        const data = await res.json();
+                        this.suggestions = data.results || [];
+                    } catch (e) {
+                        console.error('TMDB fetch error', e);
+                    }
+                },
+
+                selectSuggestion(s) {
+                    this.currentMedia = s;
+                    this.searchInput = s.id.toString();
+                    this.suggestions = [];
+                    this.search(s.id);
+                },
+
+                onEnter() {
+                    if (this.suggestions.length > 0) {
+                        this.selectSuggestion(this.suggestions[0]);
+                    } else if (this.searchInput) {
+                        this.search(this.searchInput);
+                    }
+                },
+
+                async search(id) {
+                    this.loading = true;
+                    this.suggestions = [];
+                    try {
+                        const res = await fetch(\`/v1/events?tmdb=\${id}\`);
                         const data = await res.json();
                         this.results = data.events || [];
                     } catch (e) {
@@ -238,6 +317,13 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                     } finally {
                         this.loading = false;
                     }
+                },
+
+                reset() {
+                    this.results = [];
+                    this.searchInput = '';
+                    this.currentMedia = null;
+                    this.suggestions = [];
                 },
 
                 get groupedResults() {
@@ -271,7 +357,7 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                         const promises = pack.items.map(async (item) => {
                             const res = await fetch(\`/v1/events/\${item.id}/content\`);
                             const blob = await res.blob();
-                            const filename = item.filename || \`S\${item.season}E\${item.ep}.\${item.language}.ass\`;
+                            const filename = item.filename || \`S\${item.season_num}E\${item.episode_num}.\${item.language}.ass\`;
                             zip.file(filename, blob);
                         });
 

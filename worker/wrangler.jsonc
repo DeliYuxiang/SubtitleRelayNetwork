@@ -10,7 +10,8 @@
     {
       "binding": "DB",
       "database_name": "srn-d1-name-placeholder",
-      "database_id": "srn-d1-id-placeholder"
+      "database_id": "srn-d1-id-placeholder",
+      "migrations_dir": "migrations"
     }
   ],
   "r2_buckets": [

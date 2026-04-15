@@ -1,0 +1,46 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "srn-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-04-05",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "srn-test-db",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "srn-test-bucket"
+    },
+    {
+      "binding": "BACKUP_BUCKET",
+      "bucket_name": "srn-test-backup-bucket"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  },
+  "unsafe": {
+    "bindings": [
+      {
+        "name": "SEARCH_LIMITER",
+        "type": "ratelimit",
+        "namespace_id": "1001",
+        "simple": { "limit": 3, "period": 60 }
+      },
+      {
+        "name": "DEFAULT_LIMITER",
+        "type": "ratelimit",
+        "namespace_id": "1002",
+        "simple": { "limit": 999, "period": 60 }
+      }
+    ]
+  }
+}

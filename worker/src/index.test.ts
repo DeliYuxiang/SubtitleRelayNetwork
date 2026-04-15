@@ -40,4 +40,31 @@ describe("SRN Worker Integration Tests", () => {
     const body = await response.text();
     expect(body).toContain("swagger-ui");
   });
+
+  it("should return 503 during maintenance mode", async () => {
+    // Override env for this test
+    const maintenanceEnv = { ...env, MAINTENANCE_MODE: "true" };
+    const request = new Request("http://example.com/v1/health");
+    const ctx = createExecutionContext();
+
+    // @ts-ignore: Testing middleware logic with mocked env
+    const response = await worker.fetch(request, maintenanceEnv, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect(response.status).toBe(503);
+    const body = await response.text();
+    expect(body).toContain("Maintenance");
+  });
+
+  it("should expose identity and version", async () => {
+    const request = new Request("http://example.com/v1/identity");
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(request, env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect(response.status).toBe(200);
+    const data: any = await response.json();
+    expect(data).toHaveProperty("version");
+    expect(data.name).toBe("SRN Relay");
+  });
 });

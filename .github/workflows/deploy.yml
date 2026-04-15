@@ -14,7 +14,7 @@ on:
 jobs:
   lint-format:
     runs-on: ubuntu-latest
-    name: Code Check
+    name: Code Check & Test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,6 +29,9 @@ jobs:
 
       - name: Format Check
         run: cd worker && npm run format:check
+
+      - name: Run Tests
+        run: cd worker && npm test -- --run
 
   deploy-or-bootstrap:
     needs: [lint-format]

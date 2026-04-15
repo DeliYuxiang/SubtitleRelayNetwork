@@ -25,7 +25,10 @@ jobs:
           node-version: 20
 
       - name: Install dependencies
-        run: cd worker && npm install
+        run: |
+          cd worker
+          rm -rf node_modules package-lock.json
+          npm install
 
       - name: Format Check
         run: cd worker && npm run format:check
@@ -52,7 +55,10 @@ jobs:
           node-version: 20
 
       - name: Install dependencies
-        run: cd worker && npm install
+        run: |
+          cd worker
+          rm -rf node_modules package-lock.json
+          npm install
 
       - name: Check for Infrastructure Secrets
         id: check_secrets

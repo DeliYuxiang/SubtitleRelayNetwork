@@ -5,9 +5,13 @@
 ## 原初中继 (Genesis Relay)
 [![Official Relay Status](https://img.shields.io/endpoint?url=https://srn-worker.delibill.workers.dev/v1/health)](https://srn-worker.delibill.workers.dev)
 
+| 节点名称 | 运营者 | 节点 URL | 公钥 | 地理位置 |
+| :--- | :--- | :--- | :--- | :--- |
+| 原初节点 ⭐ | @DeliYuxiang | `https://srn-worker.delibill.workers.dev` | `cb469165d6b1be0d932fd77bce3eff9c2a4ea728ef600e867fc638de04e4a5dd` | 全球边缘 |
+
 ## 社区中继 (Community Relays)
 > 如果你运行了自己的 SRN 节点，欢迎通过 Pull Request 将你的节点信息加入以下列表！
 
-| 节点名称 | 运营者 | 节点 URL | 地理位置 |
-| :--- | :--- | :--- | :--- |
-| *Example Node* | *@Author* | `https://srn.example.workers.dev` | 全球边缘 |
+| 节点名称 | 运营者 | 节点 URL | 公钥 | 地理位置 |
+| :--- | :--- | :--- | :--- | :--- |
+| *Example Node* | *@Author* | `https://srn.example.workers.dev` | *your-pubkey-hex* | 全球边缘 |

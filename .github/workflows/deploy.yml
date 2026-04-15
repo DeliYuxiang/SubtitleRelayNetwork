@@ -14,39 +14,21 @@ on:
 jobs:
   lint-format:
     runs-on: ubuntu-latest
-    name: Code Formatting
-    permissions:
-      contents: write
+    name: Code Check
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          fetch-depth: 0
+          node-version: 20
 
-      # 场景 1: 直接 Push - 信任代码，执行 Full Fix & Sync
-      - name: Full Auto-Fix (On Push)
-        if: github.event_name == 'push'
-        run: |
-          cd worker && npm install && npm run format:fix && cd ..
-          if [ -n "$(git status --porcelain)" ]; then
-            git config --global user.name "github-actions[bot]"
-            git config --global user.email "github-actions[bot]@users.noreply.github.com"
-            git add .
-            if [ "${{ github.ref_name }}" != "main" ]; then
-              echo "Amending and force-pushing to ${{ github.ref_name }}..."
-              git commit --amend --no-edit
-              git push origin HEAD:${{ github.ref_name }} --force
-            else
-              echo "Main branch: Creating skip-ci commit..."
-              git commit -m "$(git log -1 --pretty=%s) [skip ci]"
-              git push origin main
-            fi
-          fi
+      - name: Install dependencies
+        run: cd worker && npm install
 
-      # 场景 2: Pull Request - 安全优先，仅执行 Read-only Check
-      - name: Read-only Check (On PR)
-        if: github.event_name == 'pull_request'
-        run: npx prettier --check "worker/src/**/*.ts"
+      - name: Format Check
+        run: cd worker && npm run format:check
 
   deploy-or-bootstrap:
     needs: [lint-format]
@@ -72,10 +54,19 @@ jobs:
       - name: Check for Infrastructure Secrets
         id: check_secrets
         run: |
-          if [ -n "${{ secrets.SRN_D1_ID }}" ] && [ -n "${{ secrets.SRN_D1_NAME }}" ] && [ -n "${{ secrets.SRN_R2_NAME }}" ]; then
+          MISSING=()
+          [ -z "${{ secrets.SRN_D1_ID }}" ] && MISSING+=("SRN_D1_ID")
+          [ -z "${{ secrets.SRN_D1_NAME }}" ] && MISSING+=("SRN_D1_NAME")
+          [ -z "${{ secrets.SRN_R2_NAME }}" ] && MISSING+=("SRN_R2_NAME")
+          [ -z "${{ secrets.SRN_BACKUP_R2_NAME }}" ] && MISSING+=("SRN_BACKUP_R2_NAME")
+          
+          if [ ${#MISSING[@]} -eq 0 ]; then
             echo "mode=deploy" >> $GITHUB_OUTPUT
-          else
+          elif [ ${#MISSING[@]} -eq 4 ]; then
             echo "mode=bootstrap" >> $GITHUB_OUTPUT
+          else
+            echo "::error::Partial infrastructure secrets detected. You might have forgotten to configure: ${MISSING[*]}"
+            exit 1
           fi
 
       # --- MODE A: Deploy ---
@@ -87,10 +78,24 @@ jobs:
           sed -i "s/srn-d1-name-placeholder/${{ secrets.SRN_D1_NAME }}/g" wrangler.jsonc
           sed -i "s/srn-d1-id-placeholder/${{ secrets.SRN_D1_ID }}/g" wrangler.jsonc
           sed -i "s/srn-r2-name-placeholder/${{ secrets.SRN_R2_NAME }}/g" wrangler.jsonc
+          sed -i "s/srn-backup-r2-name-placeholder/${{ secrets.SRN_BACKUP_R2_NAME }}/g" wrangler.jsonc
           
-          # Apply database migrations before deployment
-          npx wrangler d1 migrations apply ${{ secrets.SRN_D1_NAME }} --remote
+          # 1. STOP: Enable Maintenance Mode
+          echo "::notice::Enabling Maintenance Mode before backup..."
+          npx wrangler deploy --var MAINTENANCE_MODE:true
           
+          # 2. BACKUP: Backup D1 with Commit SHA in filename
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          BACKUP_FILE="backup-$(date +%Y%m%d-%H%M%S)-$SHORT_SHA.sql"
+          echo "::notice::Backing up D1 to R2: $BACKUP_FILE"
+          npx wrangler d1 export ${{ secrets.SRN_D1_NAME }} --remote --output "$BACKUP_FILE"
+          npx wrangler r2 object put "${{ secrets.SRN_BACKUP_R2_NAME }}/$BACKUP_FILE" --file "$BACKUP_FILE"
+          rm "$BACKUP_FILE"
+
+          # 3. MIGRATE: Apply database migrations
+          npx wrangler d1 migrations apply ${{ secrets.SRN_D1_NAME }} --remote --yes
+          
+          # 4. DEPLOY: Production Deployment (implicitly clears MAINTENANCE_MODE)
           DEPLOY_OUTPUT=$(npx wrangler deploy)
           echo "$DEPLOY_OUTPUT"
           
@@ -116,8 +121,10 @@ jobs:
           
           DB_NAME="srn-db-$TS"
           R2_NAME="srn-assets-$TS"
+          BACKUP_R2_NAME="srn-backup-$TS"
           
           npx wrangler r2 bucket create $R2_NAME &>/dev/null || true
+          npx wrangler r2 bucket create $BACKUP_R2_NAME &>/dev/null || true
           npx wrangler d1 create $DB_NAME &>/dev/null || true
           
           D1_ID=$(npx wrangler d1 list 2>/dev/null | grep "$DB_NAME" | grep -oE "[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}" | head -n 1)
@@ -127,13 +134,14 @@ jobs:
           sed -i "s/srn-d1-name-placeholder/$DB_NAME/g" wrangler.jsonc
           sed -i "s/srn-d1-id-placeholder/$D1_ID/g" wrangler.jsonc
           sed -i "s/srn-r2-name-placeholder/$R2_NAME/g" wrangler.jsonc
+          sed -i "s/srn-backup-r2-name-placeholder/$BACKUP_R2_NAME/g" wrangler.jsonc
           
           npx wrangler d1 migrations apply $DB_NAME --remote --yes
 
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add wrangler.jsonc
-          git commit -m "infra: provisioning $DB_NAME and $R2_NAME"
+          git commit -m "infra: provisioning $DB_NAME, $R2_NAME and $BACKUP_R2_NAME"
           git push origin $BRANCH_NAME
 
           echo "::notice::Cloudless infrastructure provisioned on '$BRANCH_NAME'. Merge and add secrets."

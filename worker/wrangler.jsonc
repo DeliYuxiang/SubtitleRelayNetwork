@@ -18,6 +18,10 @@
     {
       "binding": "BUCKET",
       "bucket_name": "srn-r2-name-placeholder"
+    },
+    {
+      "binding": "BACKUP_BUCKET",
+      "bucket_name": "srn-backup-r2-name-placeholder"
     }
   ],
   "observability": {

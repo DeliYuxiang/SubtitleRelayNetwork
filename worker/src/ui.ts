@@ -416,7 +416,6 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                                 <div v-for="src in pack.sources" class="source-row">
                                     <span class="source-type-badge">{{ src.type }}</span>
                                     <a :href="src.uri" target="_blank" rel="noopener" class="source-uri">{{ src.uri }}</a>
-                                    <a :href="src.uri" target="_blank" rel="noopener" class="action-btn source-btn">喝水不忘挖井人</a>
                                 </div>
                             </div>
 

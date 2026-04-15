@@ -1,0 +1,75 @@
+name: Rollback D1 Database
+
+on:
+  workflow_dispatch:
+    inputs:
+      backup_file:
+        description: 'Backup filename in R2 (leave empty for latest)'
+        required: false
+        default: 'latest'
+
+jobs:
+  rollback:
+    name: Database Rollback
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Wrangler
+        run: npm install -g wrangler
+
+      - name: Identify and Download Backup
+        id: fetch_backup
+        run: |
+          BACKUP_FILE="${{ github.event.inputs.backup_file }}"
+          
+          if [ "$BACKUP_FILE" = "latest" ]; then
+            echo "Searching for latest backup in ${{ secrets.SRN_BACKUP_R2_NAME }}..."
+            LATEST=$(wrangler r2 object list "${{ secrets.SRN_BACKUP_R2_NAME }}" --prefix backup- --json | jq -r 'sort_by(.key) | last | .key')
+            if [ "$LATEST" = "null" ] || [ -z "$LATEST" ]; then exit 1; fi
+            BACKUP_FILE=$LATEST
+          fi
+          
+          # Extract SHA from filename (e.g., backup-20260415-103000-a1b2c3d.sql)
+          COMMIT_SHA=$(echo "$BACKUP_FILE" | grep -oE "[a-f0-9]{7}" | tail -n 1)
+          
+          echo "Target backup: $BACKUP_FILE (Commit: $COMMIT_SHA)"
+          echo "file_name=$BACKUP_FILE" >> $GITHUB_OUTPUT
+          echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
+          
+          wrangler r2 object get "${{ secrets.SRN_BACKUP_R2_NAME }}/$BACKUP_FILE" --file rollback.sql
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Code & Database Rollback
+        run: |
+          echo "::warning::Step 1: RESTORING DATABASE..."
+          wrangler d1 execute ${{ secrets.SRN_D1_NAME }} --remote --file=rollback.sql --yes
+          
+          if [ -n "${{ steps.fetch_backup.outputs.commit_sha }}" ]; then
+            echo "::warning::Step 2: ROLLING BACK CODE TO ${{ steps.fetch_backup.outputs.commit_sha }}..."
+            # Reset and re-deploy specific commit code
+            git checkout ${{ steps.fetch_backup.outputs.commit_sha }}
+            cd worker && npm install
+            
+            # Use placeholders for secrets as in deploy.yml
+            sed -i "s/srn-d1-name-placeholder/${{ secrets.SRN_D1_NAME }}/g" wrangler.jsonc
+            sed -i "s/srn-d1-id-placeholder/${{ secrets.SRN_D1_ID }}/g" wrangler.jsonc
+            sed -i "s/srn-r2-name-placeholder/${{ secrets.SRN_R2_NAME }}/g" wrangler.jsonc
+            sed -i "s/srn-backup-r2-name-placeholder/${{ secrets.SRN_BACKUP_R2_NAME }}/g" wrangler.jsonc
+            
+            npx wrangler deploy
+            echo "::notice::Code successfully rolled back to ${{ steps.fetch_backup.outputs.commit_sha }}"
+          else
+            echo "::error::Could not extract SHA from backup filename. Code rollback skipped."
+          fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

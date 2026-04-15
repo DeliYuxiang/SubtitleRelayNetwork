@@ -64,17 +64,19 @@ jobs:
         id: check_secrets
         run: |
           MISSING=()
-          [ -z "${{ secrets.SRN_D1_ID }}" ] && MISSING+=("SRN_D1_ID")
-          [ -z "${{ secrets.SRN_D1_NAME }}" ] && MISSING+=("SRN_D1_NAME")
-          [ -z "${{ secrets.SRN_R2_NAME }}" ] && MISSING+=("SRN_R2_NAME")
-          [ -z "${{ secrets.SRN_BACKUP_R2_NAME }}" ] && MISSING+=("SRN_BACKUP_R2_NAME")
-          
+          [ -z "${{ secrets.SRN_D1_ID }}" ]           && MISSING+=("SRN_D1_ID")
+          [ -z "${{ secrets.SRN_D1_NAME }}" ]         && MISSING+=("SRN_D1_NAME")
+          [ -z "${{ secrets.SRN_R2_NAME }}" ]         && MISSING+=("SRN_R2_NAME")
+          [ -z "${{ secrets.SRN_BACKUP_R2_NAME }}" ]  && MISSING+=("SRN_BACKUP_R2_NAME")
+          [ -z "${{ secrets.RELAY_PRIVATE_KEY }}" ]   && MISSING+=("RELAY_PRIVATE_KEY")
+          [ -z "${{ secrets.RELAY_PUBLIC_KEY }}" ]    && MISSING+=("RELAY_PUBLIC_KEY")
+
           if [ ${#MISSING[@]} -eq 0 ]; then
             echo "mode=deploy" >> $GITHUB_OUTPUT
-          elif [ ${#MISSING[@]} -eq 4 ]; then
+          elif [ ${#MISSING[@]} -eq 6 ]; then
             echo "mode=bootstrap" >> $GITHUB_OUTPUT
           else
-            echo "::error::Partial infrastructure secrets detected. You might have forgotten to configure: ${MISSING[*]}"
+            echo "::error::Partial infrastructure secrets detected. Missing: ${MISSING[*]}"
             exit 1
           fi
 
@@ -86,6 +88,8 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELAY_PRIVATE_KEY: ${{ secrets.RELAY_PRIVATE_KEY }}
+          RELAY_PUBLIC_KEY: ${{ secrets.RELAY_PUBLIC_KEY }}
           WRANGLER_NON_INTERACTIVE: "true"
         run: |
           cd worker
@@ -100,6 +104,9 @@ jobs:
           sed -i "s/srn-search-limit-placeholder/$SEARCH_LIMIT/g" wrangler.jsonc
           sed -i "s/srn-default-limit-placeholder/$DEFAULT_LIMIT/g" wrangler.jsonc
           
+          # 0. KEYPAIR: Re-apply relay private key to Cloudflare Worker Secrets (branch recovery)
+          printf '%s' "$RELAY_PRIVATE_KEY" | npx wrangler secret put RELAY_PRIVATE_KEY
+
           # 1. STOP: Query live SHA, then enable Maintenance Mode
           # The live worker exposes its baked-in COMMIT_SHA via /v1/identity
           WORKERS_SUBDOMAIN=$(curl -sf "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/workers/subdomain" \
@@ -144,8 +151,10 @@ jobs:
           # 3. MIGRATE: Apply database migrations
           npx wrangler d1 migrations apply ${{ secrets.SRN_D1_NAME }} --remote
           
-          # 4. DEPLOY: Production Deployment (bakes SHA in, implicitly clears MAINTENANCE_MODE)
-          DEPLOY_OUTPUT=$(npx wrangler deploy --var COMMIT_SHA:$(git rev-parse --short HEAD))
+          # 4. DEPLOY: Production Deployment (bakes SHA + relay pubkey, implicitly clears MAINTENANCE_MODE)
+          DEPLOY_OUTPUT=$(npx wrangler deploy \
+            --var COMMIT_SHA:$(git rev-parse --short HEAD) \
+            --var RELAY_PUBLIC_KEY:"$RELAY_PUBLIC_KEY")
           echo "$DEPLOY_OUTPUT"
 
           DEPLOYED_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE "https://[a-zA-Z0-9.-]+\.workers\.dev" | head -n 1)
@@ -179,6 +188,12 @@ jobs:
           WRANGLER_NON_INTERACTIVE: "true"
 
       # --- MODE B: Bootstrap ---
+      - name: Setup Go (Bootstrap)
+        if: steps.check_secrets.outputs.mode == 'bootstrap'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
       - name: Infrastructure Bootstrap
         if: steps.check_secrets.outputs.mode == 'bootstrap'
         run: |
@@ -210,13 +225,29 @@ jobs:
           
           npx wrangler d1 migrations apply $DB_NAME --remote
 
+          # Generate relay Ed25519 keypair
+          KEYGEN_OUTPUT=$(cd .. && CGO_ENABLED=0 go run cmd/keygen/main.go)
+          NEW_RELAY_PUBKEY=$(echo "$KEYGEN_OUTPUT" | grep "Public Key (hex):" | awk '{print $4}')
+          NEW_RELAY_PRIVKEY=$(echo "$KEYGEN_OUTPUT" | grep "Private Key (hex):" | awk '{print $4}')
+
+          # Print BOTH keys BEFORE masking — this is the only time they are visible.
+          # ACTION REQUIRED: add both values as GitHub Secrets.
+          echo "::notice::=== RELAY KEYPAIR GENERATED ==="
+          echo "::notice::RELAY_PUBLIC_KEY  (add as GitHub Secret): $NEW_RELAY_PUBKEY"
+          echo "::notice::RELAY_PRIVATE_KEY (add as GitHub Secret): $NEW_RELAY_PRIVKEY"
+          echo "::notice::==================================="
+          echo "::add-mask::$NEW_RELAY_PRIVKEY"
+
+          # Apply private key to Cloudflare Worker Secrets now so the Worker works after merge
+          printf '%s' "$NEW_RELAY_PRIVKEY" | npx wrangler secret put RELAY_PRIVATE_KEY
+
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add wrangler.jsonc
-          git commit -m "infra: provisioning $DB_NAME, $R2_NAME and $BACKUP_R2_NAME"
+          git commit -m "infra: provisioning $DB_NAME, $R2_NAME, $BACKUP_R2_NAME and relay keypair"
           git push origin $BRANCH_NAME
 
-          echo "::notice::Cloudless infrastructure provisioned on '$BRANCH_NAME'. Merge and add secrets."
+          echo "::notice::Infrastructure provisioned on '$BRANCH_NAME'. Merge branch, then add GitHub Secrets: SRN_D1_ID=$D1_ID  SRN_D1_NAME=$DB_NAME  SRN_R2_NAME=$R2_NAME  SRN_BACKUP_R2_NAME=$BACKUP_R2_NAME  RELAY_PUBLIC_KEY=<see notice above>  RELAY_PRIVATE_KEY=<see notice above>"
           exit 1
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -236,7 +267,7 @@ jobs:
             git pull --rebase origin main
             
             sed -i "s|\[pending deployment\]|$DEPLOYED_URL|g" README.md
-            sed -i "/## 官方中继/,/## 社区中继/s|\[pending deployment\]|$DEPLOYED_URL|g" RELAYS.md
+            sed -i "/## 原初中继/,/## 社区中继/s|\[pending deployment\]|$DEPLOYED_URL|g" RELAYS.md
             
             git add README.md RELAYS.md
             git commit -m "docs: sync live relay registry [skip ci]" || echo "No changes"

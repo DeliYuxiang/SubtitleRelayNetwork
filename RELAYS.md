@@ -2,7 +2,7 @@
 
 这里列出了由社区成员运行的活跃 SRN 中继节点。你可以将这些 URL 添加到你的 Hijarr 或客户端中以获得更好的全球加速体验。
 
-## 官方中继 (Official Relay)
+## 原初中继 (Genesis Relay)
 [![Official Relay Status](https://img.shields.io/endpoint?url=https://srn-worker.delibill.workers.dev/v1/health)](https://srn-worker.delibill.workers.dev)
 
 ## 社区中继 (Community Relays)

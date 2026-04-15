@@ -16,9 +16,9 @@ SRN 是以下基础设施项目的核心组件：
 | 项目 | 角色 |
 | :--- | :--- |
 | **SRN**（本项目） | 去中心化字幕中继协议 + 边缘节点 |
-| [**Hijarr**](https://github.com/DeliYuxiang/hijarr) | 智能客户端 — 字幕检索、TMDB 匹配、指纹计算、自动发布至 SRN |
+| [**Hijarr**](https://github.com/DeliYuxiang/hijarr) (将开源) | 智能客户端 — 字幕检索、TMDB 匹配、指纹计算、自动发布至 SRN |
 | [**Sonarr**](https://github.com/Sonarr/Sonarr) | 剧集管理 — 自动下载、文件组织，Hijarr 从其获取剧集元数据 |
-| [**Caddy**](https://github.com/caddyserver/caddy) | 反向代理 — 可选地将 Hijarr 及 SRN 节点暴露为可寻址服务 |
+| [**Caddy**](https://github.com/caddyserver/caddy) | 反向代理 — 在 Hijarr 还未列入sonarr支持的时候承担skyhook/tvdb -> tmdb的中间人 |
 
 > Hijarr 是 SRN 的第一方客户端实现，完整展示了"Smart Client"应如何与 SRN 协议交互。
 
@@ -30,7 +30,7 @@ SRN 是以下基础设施项目的核心组件：
 
 | 节点名称 | URL | 状态 |
 | :--- | :--- | :--- |
-| 官方节点 ⭐ | `https://srn-worker.delibill.workers.dev` | [![Status](https://img.shields.io/endpoint?url=https://srn-worker.delibill.workers.dev/v1/health)](https://srn-worker.delibill.workers.dev) |
+| 原初节点 ⭐ | `https://srn-worker.delibill.workers.dev` | [![Status](https://img.shields.io/endpoint?url=https://srn-worker.delibill.workers.dev/v1/health)](https://srn-worker.delibill.workers.dev) |
 | *社区节点（欢迎提交 PR）* | — | — |
 
 > **部署自己的节点**：Fork 本仓库，在 GitHub Secrets 中配置 `CLOUDFLARE_API_TOKEN`，Workflow 会全自动完成基础设施申请与部署。详见下方[部署指南](#%EF%B8%8F-部署指南)。

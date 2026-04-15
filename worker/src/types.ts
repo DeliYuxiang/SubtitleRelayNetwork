@@ -9,6 +9,7 @@ export type Bindings = {
   SEARCH_LIMITER: RateLimit;
   DEFAULT_LIMITER: RateLimit;
   RELAY_PUBLIC_KEY?: string;
+  RELAY_PRIVATE_KEY?: string;
   COMMIT_SHA?: string;
 };
 

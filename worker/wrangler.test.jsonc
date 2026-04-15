@@ -9,19 +9,19 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "srn-d1-name-placeholder",
-      "database_id": "srn-d1-id-placeholder",
+      "database_name": "srn-test-db",
+      "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "migrations"
     }
   ],
   "r2_buckets": [
     {
       "binding": "BUCKET",
-      "bucket_name": "srn-r2-name-placeholder"
+      "bucket_name": "srn-test-bucket"
     },
     {
       "binding": "BACKUP_BUCKET",
-      "bucket_name": "srn-backup-r2-name-placeholder"
+      "bucket_name": "srn-test-backup-bucket"
     }
   ],
   "observability": {
@@ -33,13 +33,13 @@
         "name": "SEARCH_LIMITER",
         "type": "ratelimit",
         "namespace_id": "1001",
-        "simple": { "limit": srn-search-limit-placeholder, "period": 60 }
+        "simple": { "limit": 3, "period": 60 }
       },
       {
         "name": "DEFAULT_LIMITER",
         "type": "ratelimit",
         "namespace_id": "1002",
-        "simple": { "limit": srn-default-limit-placeholder, "period": 60 }
+        "simple": { "limit": 999, "period": 60 }
       }
     ]
   }

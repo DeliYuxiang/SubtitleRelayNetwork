@@ -14,39 +14,27 @@ on:
 jobs:
   lint-format:
     runs-on: ubuntu-latest
-    name: Code Formatting
-    permissions:
-      contents: write
+    name: Code Check & Test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          fetch-depth: 0
+          node-version: 20
 
-      # 场景 1: 直接 Push - 信任代码，执行 Full Fix & Sync
-      - name: Full Auto-Fix (On Push)
-        if: github.event_name == 'push'
+      - name: Install dependencies
         run: |
-          cd worker && npm install && npm run format:fix && cd ..
-          if [ -n "$(git status --porcelain)" ]; then
-            git config --global user.name "github-actions[bot]"
-            git config --global user.email "github-actions[bot]@users.noreply.github.com"
-            git add .
-            if [ "${{ github.ref_name }}" != "main" ]; then
-              echo "Amending and force-pushing to ${{ github.ref_name }}..."
-              git commit --amend --no-edit
-              git push origin HEAD:${{ github.ref_name }} --force
-            else
-              echo "Main branch: Creating skip-ci commit..."
-              git commit -m "$(git log -1 --pretty=%s) [skip ci]"
-              git push origin main
-            fi
-          fi
+          cd worker
+          rm -rf node_modules package-lock.json
+          npm install
 
-      # 场景 2: Pull Request - 安全优先，仅执行 Read-only Check
-      - name: Read-only Check (On PR)
-        if: github.event_name == 'pull_request'
-        run: npx prettier --check "worker/src/**/*.ts"
+      - name: Format Check
+        run: cd worker && npm run format:check
+
+      - name: Run Tests
+        run: cd worker && npm test -- --run
 
   deploy-or-bootstrap:
     needs: [lint-format]
@@ -67,43 +55,128 @@ jobs:
           node-version: 20
 
       - name: Install dependencies
-        run: cd worker && npm install
+        run: |
+          cd worker
+          rm -rf node_modules package-lock.json
+          npm install
 
       - name: Check for Infrastructure Secrets
         id: check_secrets
         run: |
-          if [ -n "${{ secrets.SRN_D1_ID }}" ] && [ -n "${{ secrets.SRN_D1_NAME }}" ] && [ -n "${{ secrets.SRN_R2_NAME }}" ]; then
+          MISSING=()
+          [ -z "${{ secrets.SRN_D1_ID }}" ] && MISSING+=("SRN_D1_ID")
+          [ -z "${{ secrets.SRN_D1_NAME }}" ] && MISSING+=("SRN_D1_NAME")
+          [ -z "${{ secrets.SRN_R2_NAME }}" ] && MISSING+=("SRN_R2_NAME")
+          [ -z "${{ secrets.SRN_BACKUP_R2_NAME }}" ] && MISSING+=("SRN_BACKUP_R2_NAME")
+          
+          if [ ${#MISSING[@]} -eq 0 ]; then
             echo "mode=deploy" >> $GITHUB_OUTPUT
-          else
+          elif [ ${#MISSING[@]} -eq 4 ]; then
             echo "mode=bootstrap" >> $GITHUB_OUTPUT
+          else
+            echo "::error::Partial infrastructure secrets detected. You might have forgotten to configure: ${MISSING[*]}"
+            exit 1
           fi
 
       # --- MODE A: Deploy ---
       - name: Production Deployment
         id: prod_deploy
         if: steps.check_secrets.outputs.mode == 'deploy'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WRANGLER_NON_INTERACTIVE: "true"
         run: |
           cd worker
           sed -i "s/srn-d1-name-placeholder/${{ secrets.SRN_D1_NAME }}/g" wrangler.jsonc
           sed -i "s/srn-d1-id-placeholder/${{ secrets.SRN_D1_ID }}/g" wrangler.jsonc
           sed -i "s/srn-r2-name-placeholder/${{ secrets.SRN_R2_NAME }}/g" wrangler.jsonc
+          sed -i "s/srn-backup-r2-name-placeholder/${{ secrets.SRN_BACKUP_R2_NAME }}/g" wrangler.jsonc
           
-          # Apply database migrations before deployment
+          # Dynamic Rate Limits (with defaults)
+          SEARCH_LIMIT=${{ secrets.SRN_SEARCH_LIMIT || 3 }}
+          DEFAULT_LIMIT=${{ secrets.SRN_DEFAULT_LIMIT || 999 }}
+          sed -i "s/srn-search-limit-placeholder/$SEARCH_LIMIT/g" wrangler.jsonc
+          sed -i "s/srn-default-limit-placeholder/$DEFAULT_LIMIT/g" wrangler.jsonc
+          
+          # 1. STOP: Query live SHA, then enable Maintenance Mode
+          # The live worker exposes its baked-in COMMIT_SHA via /v1/identity
+          WORKERS_SUBDOMAIN=$(curl -sf "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/workers/subdomain" \
+            -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" | jq -r '.result.subdomain')
+          LIVE_URL="https://srn-worker.${WORKERS_SUBDOMAIN}.workers.dev"
+          SHORT_SHA=$(curl -sf "$LIVE_URL/v1/identity" | jq -r '.commit // empty')
+          if [ -z "$SHORT_SHA" ] || [ "$SHORT_SHA" = "unknown" ]; then
+            SHORT_SHA="initial"
+          fi
+          echo "::notice::Currently deployed SHA: $SHORT_SHA"
+
+          echo "::notice::Enabling Maintenance Mode before backup..."
+          npx wrangler deploy --var MAINTENANCE_MODE:true --var COMMIT_SHA:$SHORT_SHA
+
+          # 2. BACKUP: Backup D1, named after the currently deployed SHA
+          BACKUP_FILE="backup-$(date +%Y%m%d-%H%M%S)-$SHORT_SHA.sql"
+          echo "::notice::Backing up D1 to R2: $BACKUP_FILE"
+          npx wrangler d1 export ${{ secrets.SRN_D1_NAME }} --remote --output "$BACKUP_FILE"
+          
+          # Calculate local MD5
+          LOCAL_MD5=$(md5sum "$BACKUP_FILE" | awk '{ print $1 }')
+          echo "Local MD5: $LOCAL_MD5"
+
+          # Force remote upload
+          npx wrangler r2 object put "${{ secrets.SRN_BACKUP_R2_NAME }}/$BACKUP_FILE" --file "$BACKUP_FILE" --remote
+
+          # 2.1 Verification (Foolproof MD5 Check)
+          echo "::notice::Verifying R2 upload integrity..."
+          npx wrangler r2 object get "${{ secrets.SRN_BACKUP_R2_NAME }}/$BACKUP_FILE" --file "verify_$BACKUP_FILE" --remote
+          REMOTE_MD5=$(md5sum "verify_$BACKUP_FILE" | awk '{ print $1 }')
+          rm "verify_$BACKUP_FILE"
+
+          if [ "$LOCAL_MD5" == "$REMOTE_MD5" ]; then
+            echo "::notice::Integrity check passed (MD5: $LOCAL_MD5)"
+          else
+            echo "::error::MD5 Mismatch! Local: $LOCAL_MD5, Remote: $REMOTE_MD5. Backup might be corrupted."
+            exit 1
+          fi
+
+          rm "$BACKUP_FILE"
+
+          # 3. MIGRATE: Apply database migrations
           npx wrangler d1 migrations apply ${{ secrets.SRN_D1_NAME }} --remote
           
-          DEPLOY_OUTPUT=$(npx wrangler deploy)
+          # 4. DEPLOY: Production Deployment (bakes SHA in, implicitly clears MAINTENANCE_MODE)
+          DEPLOY_OUTPUT=$(npx wrangler deploy --var COMMIT_SHA:$(git rev-parse --short HEAD))
           echo "$DEPLOY_OUTPUT"
-          
+
           DEPLOYED_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE "https://[a-zA-Z0-9.-]+\.workers\.dev" | head -n 1)
           echo "deployed_url=$DEPLOYED_URL" >> $GITHUB_OUTPUT
-          
+
           git ls-remote --heads origin "refs/heads/infra/provision-*" | awk '{print $2}' | sed 's|refs/heads/||' | while read branch; do
             git push origin --delete $branch || true
           done
+
+      - name: Emergency Restore (Disable Maintenance Mode)
+        if: failure() && steps.check_secrets.outputs.mode == 'deploy'
+        run: |
+          cd worker
+          sed -i "s/srn-d1-name-placeholder/${{ secrets.SRN_D1_NAME }}/g" wrangler.jsonc
+          sed -i "s/srn-d1-id-placeholder/${{ secrets.SRN_D1_ID }}/g" wrangler.jsonc
+          sed -i "s/srn-r2-name-placeholder/${{ secrets.SRN_R2_NAME }}/g" wrangler.jsonc
+          sed -i "s/srn-backup-r2-name-placeholder/${{ secrets.SRN_BACKUP_R2_NAME }}/g" wrangler.jsonc
+          
+          # Dynamic Rate Limits
+          SEARCH_LIMIT=${{ secrets.SRN_SEARCH_LIMIT || 3 }}
+          DEFAULT_LIMIT=${{ secrets.SRN_DEFAULT_LIMIT || 999 }}
+          sed -i "s/srn-search-limit-placeholder/$SEARCH_LIMIT/g" wrangler.jsonc
+          sed -i "s/srn-default-limit-placeholder/$DEFAULT_LIMIT/g" wrangler.jsonc
+          
+          echo "::warning::Deployment failed. Forcing maintenance mode OFF..."
+          npx wrangler deploy --var MAINTENANCE_MODE:false
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WRANGLER_NON_INTERACTIVE: "true"
 
       # --- MODE B: Bootstrap ---
       - name: Infrastructure Bootstrap
@@ -116,8 +189,10 @@ jobs:
           
           DB_NAME="srn-db-$TS"
           R2_NAME="srn-assets-$TS"
+          BACKUP_R2_NAME="srn-backup-$TS"
           
           npx wrangler r2 bucket create $R2_NAME &>/dev/null || true
+          npx wrangler r2 bucket create $BACKUP_R2_NAME &>/dev/null || true
           npx wrangler d1 create $DB_NAME &>/dev/null || true
           
           D1_ID=$(npx wrangler d1 list 2>/dev/null | grep "$DB_NAME" | grep -oE "[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}" | head -n 1)
@@ -127,13 +202,18 @@ jobs:
           sed -i "s/srn-d1-name-placeholder/$DB_NAME/g" wrangler.jsonc
           sed -i "s/srn-d1-id-placeholder/$D1_ID/g" wrangler.jsonc
           sed -i "s/srn-r2-name-placeholder/$R2_NAME/g" wrangler.jsonc
+          sed -i "s/srn-backup-r2-name-placeholder/$BACKUP_R2_NAME/g" wrangler.jsonc
           
-          npx wrangler d1 migrations apply $DB_NAME --remote --yes
+          # Defaults for bootstrap
+          sed -i "s/srn-search-limit-placeholder/3/g" wrangler.jsonc
+          sed -i "s/srn-default-limit-placeholder/999/g" wrangler.jsonc
+          
+          npx wrangler d1 migrations apply $DB_NAME --remote
 
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add wrangler.jsonc
-          git commit -m "infra: provisioning $DB_NAME and $R2_NAME"
+          git commit -m "infra: provisioning $DB_NAME, $R2_NAME and $BACKUP_R2_NAME"
           git push origin $BRANCH_NAME
 
           echo "::notice::Cloudless infrastructure provisioned on '$BRANCH_NAME'. Merge and add secrets."

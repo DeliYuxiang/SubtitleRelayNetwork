@@ -195,7 +195,11 @@ app.post("/v1/events", async (c) => {
   const compressionStream = file
     .stream()
     .pipeThrough(new CompressionStream("gzip"));
-  await c.env.BUCKET.put(r2Key, compressionStream, {
+
+  // Convert stream to ArrayBuffer to provide a known length for R2
+  const compressedBuffer = await new Response(compressionStream).arrayBuffer();
+
+  await c.env.BUCKET.put(r2Key, compressedBuffer, {
     httpMetadata: {
       contentType: file.type || "text/plain",
       contentEncoding: "gzip",

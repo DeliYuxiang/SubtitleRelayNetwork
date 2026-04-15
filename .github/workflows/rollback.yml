@@ -31,7 +31,10 @@ jobs:
           
           if [ "$BACKUP_FILE" = "latest" ]; then
             echo "Searching for latest backup in ${{ secrets.SRN_BACKUP_R2_NAME }}..."
-            LATEST=$(wrangler r2 object list "${{ secrets.SRN_BACKUP_R2_NAME }}" --prefix backup- --json | jq -r 'sort_by(.key) | last | .key')
+            LATEST=$(curl -s -X GET \
+              "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/r2/buckets/${{ secrets.SRN_BACKUP_R2_NAME }}/objects?prefix=backup-" \
+              -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+              | jq -r '.result.objects | sort_by(.key) | last | .key')
             if [ "$LATEST" = "null" ] || [ -z "$LATEST" ]; then exit 1; fi
             BACKUP_FILE=$LATEST
           fi

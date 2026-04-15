@@ -28,6 +28,7 @@ ui.get("/v1/identity", async (c) => {
     pubkey: c.env.RELAY_PUBLIC_KEY || "",
     name: "SRN Relay",
     version: RELAY_VERSION,
+    commit: c.env.COMMIT_SHA || "unknown",
     description: "SRN Phase 2 Cloud Relay",
   });
 });

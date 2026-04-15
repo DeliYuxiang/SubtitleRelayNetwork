@@ -100,12 +100,21 @@ jobs:
           sed -i "s/srn-search-limit-placeholder/$SEARCH_LIMIT/g" wrangler.jsonc
           sed -i "s/srn-default-limit-placeholder/$DEFAULT_LIMIT/g" wrangler.jsonc
           
-          # 1. STOP: Enable Maintenance Mode
+          # 1. STOP: Query live SHA, then enable Maintenance Mode
+          # The live worker exposes its baked-in COMMIT_SHA via /v1/identity
+          WORKERS_SUBDOMAIN=$(curl -sf "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/workers/subdomain" \
+            -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" | jq -r '.result.subdomain')
+          LIVE_URL="https://srn-worker.${WORKERS_SUBDOMAIN}.workers.dev"
+          SHORT_SHA=$(curl -sf "$LIVE_URL/v1/identity" | jq -r '.commit // empty')
+          if [ -z "$SHORT_SHA" ] || [ "$SHORT_SHA" = "unknown" ]; then
+            SHORT_SHA="initial"
+          fi
+          echo "::notice::Currently deployed SHA: $SHORT_SHA"
+
           echo "::notice::Enabling Maintenance Mode before backup..."
-          npx wrangler deploy --var MAINTENANCE_MODE:true
-          
-          # 2. BACKUP: Backup D1 with Commit SHA in filename
-          SHORT_SHA=$(git rev-parse --short HEAD)
+          npx wrangler deploy --var MAINTENANCE_MODE:true --var COMMIT_SHA:$SHORT_SHA
+
+          # 2. BACKUP: Backup D1, named after the currently deployed SHA
           BACKUP_FILE="backup-$(date +%Y%m%d-%H%M%S)-$SHORT_SHA.sql"
           echo "::notice::Backing up D1 to R2: $BACKUP_FILE"
           npx wrangler d1 export ${{ secrets.SRN_D1_NAME }} --remote --output "$BACKUP_FILE"
@@ -135,13 +144,13 @@ jobs:
           # 3. MIGRATE: Apply database migrations
           npx wrangler d1 migrations apply ${{ secrets.SRN_D1_NAME }} --remote
           
-          # 4. DEPLOY: Production Deployment (implicitly clears MAINTENANCE_MODE)
-          DEPLOY_OUTPUT=$(npx wrangler deploy)
+          # 4. DEPLOY: Production Deployment (bakes SHA in, implicitly clears MAINTENANCE_MODE)
+          DEPLOY_OUTPUT=$(npx wrangler deploy --var COMMIT_SHA:$(git rev-parse --short HEAD))
           echo "$DEPLOY_OUTPUT"
-          
+
           DEPLOYED_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE "https://[a-zA-Z0-9.-]+\.workers\.dev" | head -n 1)
           echo "deployed_url=$DEPLOYED_URL" >> $GITHUB_OUTPUT
-          
+
           git ls-remote --heads origin "refs/heads/infra/provision-*" | awk '{print $2}' | sed 's|refs/heads/||' | while read branch; do
             git push origin --delete $branch || true
           done

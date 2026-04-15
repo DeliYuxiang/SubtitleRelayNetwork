@@ -9,6 +9,7 @@ export type Bindings = {
   SEARCH_LIMITER: RateLimit;
   DEFAULT_LIMITER: RateLimit;
   RELAY_PUBLIC_KEY?: string;
+  COMMIT_SHA?: string;
 };
 
 export const RELAY_VERSION = "2.1.0";

@@ -89,7 +89,7 @@ jobs:
           sed -i "s/srn-r2-name-placeholder/${{ secrets.SRN_R2_NAME }}/g" wrangler.jsonc
           
           # Apply database migrations before deployment
-          npx wrangler d1 migrations apply ${{ secrets.SRN_D1_NAME }} --remote --yes
+          npx wrangler d1 migrations apply ${{ secrets.SRN_D1_NAME }} --remote
           
           DEPLOY_OUTPUT=$(npx wrangler deploy)
           echo "$DEPLOY_OUTPUT"

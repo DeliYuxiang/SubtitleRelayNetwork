@@ -82,6 +82,11 @@ jobs:
       - name: Production Deployment
         id: prod_deploy
         if: steps.check_secrets.outputs.mode == 'deploy'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WRANGLER_NON_INTERACTIVE: "true"
         run: |
           cd worker
           sed -i "s/srn-d1-name-placeholder/${{ secrets.SRN_D1_NAME }}/g" wrangler.jsonc
@@ -110,13 +115,11 @@ jobs:
           echo "Local MD5: $LOCAL_MD5"
 
           # Force remote upload
-          CLOUDFLARE_API_TOKEN=${{ secrets.CLOUDFLARE_API_TOKEN }} \
-          CLOUDFLARE_ACCOUNT_ID=${{ secrets.CLOUDFLARE_ACCOUNT_ID }} \
           npx wrangler r2 object put "${{ secrets.SRN_BACKUP_R2_NAME }}/$BACKUP_FILE" --file "$BACKUP_FILE"
 
           # 2.1 Verification (Foolproof MD5 Check)
           echo "::notice::Verifying R2 upload integrity..."
-          REMOTE_ETAG=$(CLOUDFLARE_API_TOKEN=${{ secrets.CLOUDFLARE_API_TOKEN }} CLOUDFLARE_ACCOUNT_ID=${{ secrets.CLOUDFLARE_ACCOUNT_ID }} npx wrangler r2 object list "${{ secrets.SRN_BACKUP_R2_NAME }}" --prefix "$BACKUP_FILE" --json | jq -r '.[0].etag' | tr -d '"')
+          REMOTE_ETAG=$(npx wrangler r2 object list "${{ secrets.SRN_BACKUP_R2_NAME }}" --prefix "$BACKUP_FILE" --json | jq -r '.[0].etag' | tr -d '"')
           
           if [ "$LOCAL_MD5" == "$REMOTE_ETAG" ]; then
             echo "::notice::Integrity check passed (MD5: $LOCAL_MD5)"

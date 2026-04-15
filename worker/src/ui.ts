@@ -293,11 +293,15 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
         .ep-badge {
             background: rgba(99, 102, 241, 0.1);
             color: var(--primary);
-            padding: 4px 12px;
+            padding: 4px 10px;
             border-radius: 8px;
             font-size: 0.85rem;
             border: 1px solid rgba(99, 102, 241, 0.2);
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
         }
+        .ep-lang { font-size: 0.6rem; opacity: 0.65; background: rgba(99,102,241,0.15); padding: 1px 5px; border-radius: 3px; }
 
         .pack-footer { display: flex; gap: 0.5rem; }
         .action-btn {
@@ -398,7 +402,7 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                                 </div>
                             </div>
                             <div class="md5-tag">{{ pack.archive_md5.substring(0, 10) }}…</div>
-                            <div class="count-badge">{{ pack.items.length }} 卷</div>
+                            <div class="count-badge">{{ pack.seasonGroups.reduce((n, sg) => n + sg.count, 0) }} 集</div>
                             <span class="chevron" :class="{ open: expandedGroups[pack.archive_md5] }">▼</span>
                         </div>
 
@@ -424,8 +428,8 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                                     </span>
                                 </div>
                                 <div class="episodes-list">
-                                    <div v-for="item in sg.items" class="ep-badge">
-                                        E{{ String(item.episode_num || 0).padStart(2,'0') }} · {{ item.language }}
+                                    <div v-for="ep in sg.epGroups" class="ep-badge">
+                                        E{{ String(ep.episode_num || 0).padStart(2,'0') }}<span v-for="lang in ep.languages" class="ep-lang">{{ lang }}</span>
                                     </div>
                                 </div>
                             </div>
@@ -617,11 +621,20 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                         pack.seasonGroups = Object.entries(seasonMap)
                             .sort(([a], [b]) => Number(a) - Number(b))
                             .map(([s, items]) => {
-                                items.sort((a, b) => (a.episode_num || 0) - (b.episode_num || 0));
-                                const epNums = items.map(i => i.episode_num || 0).filter(n => n > 0);
-                                const maxEp = epNums.length ? Math.max(...epNums) : items.length;
+                                // Aggregate same-episode items: multiple language variants → one row
+                                const epMap = {};
+                                items.forEach(item => {
+                                    const ep = item.episode_num || 0;
+                                    if (!epMap[ep]) epMap[ep] = { episode_num: ep, languages: [], primaryItem: item };
+                                    if (item.language && !epMap[ep].languages.includes(item.language))
+                                        epMap[ep].languages.push(item.language);
+                                });
+                                const epGroups = Object.values(epMap)
+                                    .sort((a, b) => a.episode_num - b.episode_num);
+                                const epNums = epGroups.map(e => e.episode_num).filter(n => n > 0);
+                                const maxEp = epNums.length ? Math.max(...epNums) : epGroups.length;
                                 const totalEp = this.seasonCounts[\`\${tmdbId}_\${s}\`] ?? maxEp;
-                                return { season: Number(s), items, count: items.length, totalEp };
+                                return { season: Number(s), items, epGroups, count: epGroups.length, totalEp };
                             });
 
                         return pack;

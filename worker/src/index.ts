@@ -98,8 +98,14 @@ app.openapi(
       params.push(parseInt(ep));
     }
     if (language) {
-      query += " AND m.language = ?";
-      params.push(language);
+      if (!language.includes("-")) {
+        // Family prefix: "zh" matches zh-CN, zh-TW, zh-bilingual, zh
+        query += " AND m.language LIKE ?";
+        params.push(language + "%");
+      } else {
+        query += " AND m.language = ?";
+        params.push(language);
+      }
     }
     if (archive_md5) {
       query += " AND m.archive_md5 = ?";

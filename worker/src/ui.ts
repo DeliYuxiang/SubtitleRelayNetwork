@@ -109,32 +109,46 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
         .stats-strip { display: flex; gap: 2rem; justify-content: center; color: #64748b; font-size: 0.9rem; margin-bottom: 4rem; }
         .stat-item b { color: var(--primary); }
 
-        .results-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 1.5rem; }
+        .results-list { display: flex; flex-direction: column; gap: 0.75rem; }
 
-        .pack-card {
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+
+        .pack-row {
             background: var(--card-bg);
             border: 1px solid var(--border);
-            border-radius: 24px;
-            padding: 1.5rem;
-            transition: 0.3s;
-            display: flex;
-            flex-direction: column;
-            animation: fadeInUp 0.5s ease-out backwards;
+            border-radius: 16px;
+            overflow: hidden;
+            transition: border-color 0.3s;
+            animation: fadeInUp 0.4s ease-out backwards;
         }
-        @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-        
-        .pack-card:hover { border-color: rgba(99, 102, 241, 0.5); transform: translateY(-5px); }
+        .pack-row.expanded { border-color: rgba(99, 102, 241, 0.5); }
 
-        .pack-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem; }
-        .group-name { font-weight: 600; color: #fff; font-size: 1.25rem; }
+        .pack-summary {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1.1rem 1.5rem;
+            cursor: pointer;
+            user-select: none;
+        }
+        .pack-summary:hover { background: rgba(255,255,255,0.03); }
+
+        .group-name { font-weight: 600; color: #fff; font-size: 1rem; flex: 1; }
         .md5-tag { font-family: 'JetBrains Mono'; font-size: 0.7rem; color: #64748b; background: rgba(255,255,255,0.05); padding: 2px 8px; border-radius: 4px; }
+        .count-badge { background: rgba(244, 63, 94, 0.1); color: var(--accent); padding: 3px 10px; border-radius: 6px; font-size: 0.8rem; white-space: nowrap; }
+        .chevron { color: #64748b; font-size: 0.75rem; transition: transform 0.3s; }
+        .chevron.open { transform: rotate(180deg); }
+
+        .pack-detail {
+            padding: 1rem 1.5rem 1.5rem;
+            border-top: 1px solid var(--border);
+        }
 
         .episodes-list {
-            flex: 1;
             display: flex;
             flex-wrap: wrap;
             gap: 0.5rem;
-            margin-bottom: 1.5rem;
+            margin-bottom: 1.25rem;
         }
         .ep-badge {
             background: rgba(99, 102, 241, 0.1);
@@ -188,7 +202,6 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
 
         <div class="container">
             <section class="hero" v-if="!results.length && !loading">
-                <h1>寻找你的边缘字幕</h1>
                 <div class="search-container">
                     <div class="search-box">
                         <input type="text" v-model="searchInput" @input="onInput" @keyup.enter="onEnter" placeholder="输入影视名称或 TMDB ID...">
@@ -219,29 +232,27 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
 
                 <div v-if="loading" class="loading-spinner">正在从分布式数据库读取元数据...</div>
 
-                <div v-else-if="groupedResults.length" class="results-grid">
-                    <div v-for="pack in groupedResults" class="pack-card">
-                        <div class="pack-header">
-                            <div>
-                                <div class="group-name">{{ pack.group || '未知字幕组' }}</div>
-                                <div class="md5-tag">ARCHIVE: {{ pack.archive_md5.substring(0, 12) }}...</div>
-                            </div>
-                            <div class="badge" style="background: rgba(244, 63, 94, 0.1); color: var(--accent); padding: 4px 8px; border-radius: 6px; font-size: 0.8rem;">
-                                {{ pack.items.length }} 卷
-                            </div>
+                <div v-else-if="groupedResults.length" class="results-list">
+                    <div v-for="pack in groupedResults" class="pack-row" :class="{ expanded: expandedGroups[pack.archive_md5] }">
+                        <div class="pack-summary" @click="toggleExpand(pack.archive_md5)">
+                            <div class="group-name">{{ pack.group || '未知字幕组' }}</div>
+                            <div class="md5-tag">{{ pack.archive_md5.substring(0, 12) }}…</div>
+                            <div class="count-badge">{{ pack.items.length }} 卷</div>
+                            <span class="chevron" :class="{ open: expandedGroups[pack.archive_md5] }">▼</span>
                         </div>
 
-                        <div class="episodes-list">
-                            <div v-for="item in pack.items" class="ep-badge">
-                                S{{ item.season_num || 0 }}E{{ item.episode_num || 0 }} ({{ item.language }})
+                        <div v-if="expandedGroups[pack.archive_md5]" class="pack-detail">
+                            <div class="episodes-list">
+                                <div v-for="item in pack.items" class="ep-badge">
+                                    S{{ item.season_num || 0 }}E{{ item.episode_num || 0 }} ({{ item.language }})
+                                </div>
                             </div>
-                        </div>
-
-                        <div class="pack-footer">
-                            <button class="action-btn" @click="downloadSingle(pack.items[0])">单卷下载</button>
-                            <button class="action-btn primary" @click="downloadPack(pack)">
-                                {{ downloading === pack.archive_md5 ? '打包中...' : '整季打包 (ZIP)' }}
-                            </button>
+                            <div class="pack-footer">
+                                <button class="action-btn" @click="downloadSingle(pack.items[0])">单卷下载</button>
+                                <button class="action-btn primary" @click="downloadPack(pack)">
+                                    {{ downloading === pack.archive_md5 ? '打包中...' : '整季打包 (ZIP)' }}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -268,6 +279,7 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                 downloading: null,
                 suggestions: [],
                 currentMedia: null,
+                expandedGroups: {},
                 stats: { totalEvents: ${stats.totalEvents} },
                 debounceTimer: null,
                 
@@ -324,6 +336,11 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                     this.searchInput = '';
                     this.currentMedia = null;
                     this.suggestions = [];
+                    this.expandedGroups = {};
+                },
+
+                toggleExpand(archive_md5) {
+                    this.expandedGroups[archive_md5] = !this.expandedGroups[archive_md5];
                 },
 
                 get groupedResults() {

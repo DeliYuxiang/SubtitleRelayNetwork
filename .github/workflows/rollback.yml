@@ -65,6 +65,12 @@ jobs:
             sed -i "s/srn-r2-name-placeholder/${{ secrets.SRN_R2_NAME }}/g" wrangler.jsonc
             sed -i "s/srn-backup-r2-name-placeholder/${{ secrets.SRN_BACKUP_R2_NAME }}/g" wrangler.jsonc
             
+            # Dynamic Rate Limits
+            SEARCH_LIMIT=${{ secrets.SRN_SEARCH_LIMIT || 3 }}
+            DEFAULT_LIMIT=${{ secrets.SRN_DEFAULT_LIMIT || 999 }}
+            sed -i "s/srn-search-limit-placeholder/$SEARCH_LIMIT/g" wrangler.jsonc
+            sed -i "s/srn-default-limit-placeholder/$DEFAULT_LIMIT/g" wrangler.jsonc
+            
             npx wrangler deploy
             echo "::notice::Code successfully rolled back to ${{ steps.fetch_backup.outputs.commit_sha }}"
           else

@@ -89,6 +89,12 @@ jobs:
           sed -i "s/srn-r2-name-placeholder/${{ secrets.SRN_R2_NAME }}/g" wrangler.jsonc
           sed -i "s/srn-backup-r2-name-placeholder/${{ secrets.SRN_BACKUP_R2_NAME }}/g" wrangler.jsonc
           
+          # Dynamic Rate Limits (with defaults)
+          SEARCH_LIMIT=${{ secrets.SRN_SEARCH_LIMIT || 3 }}
+          DEFAULT_LIMIT=${{ secrets.SRN_DEFAULT_LIMIT || 999 }}
+          sed -i "s/srn-search-limit-placeholder/$SEARCH_LIMIT/g" wrangler.jsonc
+          sed -i "s/srn-default-limit-placeholder/$DEFAULT_LIMIT/g" wrangler.jsonc
+          
           # 1. STOP: Enable Maintenance Mode
           echo "::notice::Enabling Maintenance Mode before backup..."
           npx wrangler deploy --var MAINTENANCE_MODE:true
@@ -144,6 +150,12 @@ jobs:
           sed -i "s/srn-r2-name-placeholder/${{ secrets.SRN_R2_NAME }}/g" wrangler.jsonc
           sed -i "s/srn-backup-r2-name-placeholder/${{ secrets.SRN_BACKUP_R2_NAME }}/g" wrangler.jsonc
           
+          # Dynamic Rate Limits
+          SEARCH_LIMIT=${{ secrets.SRN_SEARCH_LIMIT || 3 }}
+          DEFAULT_LIMIT=${{ secrets.SRN_DEFAULT_LIMIT || 999 }}
+          sed -i "s/srn-search-limit-placeholder/$SEARCH_LIMIT/g" wrangler.jsonc
+          sed -i "s/srn-default-limit-placeholder/$DEFAULT_LIMIT/g" wrangler.jsonc
+          
           echo "::warning::Deployment failed. Forcing maintenance mode OFF..."
           npx wrangler deploy --var MAINTENANCE_MODE:false
         env:
@@ -177,6 +189,10 @@ jobs:
           sed -i "s/srn-d1-id-placeholder/$D1_ID/g" wrangler.jsonc
           sed -i "s/srn-r2-name-placeholder/$R2_NAME/g" wrangler.jsonc
           sed -i "s/srn-backup-r2-name-placeholder/$BACKUP_R2_NAME/g" wrangler.jsonc
+          
+          # Defaults for bootstrap
+          sed -i "s/srn-search-limit-placeholder/3/g" wrangler.jsonc
+          sed -i "s/srn-default-limit-placeholder/999/g" wrangler.jsonc
           
           npx wrangler d1 migrations apply $DB_NAME --remote
 

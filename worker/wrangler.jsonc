@@ -33,13 +33,13 @@
         "name": "SEARCH_LIMITER",
         "type": "ratelimit",
         "namespace_id": "1001",
-        "simple": { "limit": 3, "period": 60 }
+        "simple": { "limit": srn-search-limit-placeholder, "period": 60 }
       },
       {
         "name": "DEFAULT_LIMITER",
         "type": "ratelimit",
         "namespace_id": "1002",
-        "simple": { "limit": 999, "period": 60 }
+        "simple": { "limit": srn-default-limit-placeholder, "period": 60 }
       }
     ]
   }

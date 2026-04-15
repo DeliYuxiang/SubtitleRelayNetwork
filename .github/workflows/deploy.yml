@@ -92,6 +92,10 @@ jobs:
           BACKUP_FILE="backup-$(date +%Y%m%d-%H%M%S)-$SHORT_SHA.sql"
           echo "::notice::Backing up D1 to R2: $BACKUP_FILE"
           npx wrangler d1 export ${{ secrets.SRN_D1_NAME }} --remote --output "$BACKUP_FILE"
+          
+          # Force remote upload by ensuring credentials are passed to the R2 command
+          CLOUDFLARE_API_TOKEN=${{ secrets.CLOUDFLARE_API_TOKEN }} \
+          CLOUDFLARE_ACCOUNT_ID=${{ secrets.CLOUDFLARE_ACCOUNT_ID }} \
           npx wrangler r2 object put "${{ secrets.SRN_BACKUP_R2_NAME }}/$BACKUP_FILE" --file "$BACKUP_FILE"
           rm "$BACKUP_FILE"
 

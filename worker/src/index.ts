@@ -4,6 +4,7 @@ import { Bindings, RELAY_VERSION } from "./types";
 import ui from "./routes/ui";
 import tmdb from "./routes/tmdb";
 import events from "./routes/events";
+import { relaySignMiddleware } from "./middleware/relay-sign";
 
 const app = new OpenAPIHono<{ Bindings: Bindings }>();
 
@@ -17,6 +18,9 @@ app.use("*", async (c, next) => {
   }
   await next();
 });
+
+// Relay signature middleware — signs all responses with the relay's Ed25519 key
+app.use("*", relaySignMiddleware);
 
 // Mount routes
 app.route("/", ui);

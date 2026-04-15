@@ -93,7 +93,7 @@ jobs:
           rm "$BACKUP_FILE"
 
           # 3. MIGRATE: Apply database migrations
-          npx wrangler d1 migrations apply ${{ secrets.SRN_D1_NAME }} --remote --yes
+          npx wrangler d1 migrations apply ${{ secrets.SRN_D1_NAME }} --remote
           
           # 4. DEPLOY: Production Deployment (implicitly clears MAINTENANCE_MODE)
           DEPLOY_OUTPUT=$(npx wrangler deploy)
@@ -136,7 +136,7 @@ jobs:
           sed -i "s/srn-r2-name-placeholder/$R2_NAME/g" wrangler.jsonc
           sed -i "s/srn-backup-r2-name-placeholder/$BACKUP_R2_NAME/g" wrangler.jsonc
           
-          npx wrangler d1 migrations apply $DB_NAME --remote --yes
+          npx wrangler d1 migrations apply $DB_NAME --remote
 
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"

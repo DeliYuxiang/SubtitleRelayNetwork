@@ -2,10 +2,16 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { swaggerUI } from "@hono/swagger-ui";
 import { renderLandingPage } from "./ui";
 
+interface RateLimit {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
+}
+
 type Bindings = {
   DB: D1Database;
   BUCKET: R2Bucket;
   TMDB_TOKEN?: string;
+  SEARCH_LIMITER: RateLimit;
+  DEFAULT_LIMITER: RateLimit;
 };
 
 const app = new OpenAPIHono<{ Bindings: Bindings }>();
@@ -62,12 +68,19 @@ app.openapi(
     },
   }),
   async (c) => {
+    const { success } = await c.env.DEFAULT_LIMITER.limit({
+      key: c.req.header("CF-Connecting-IP") ?? "unknown",
+    });
+    if (!success) return c.json({ error: "Too many requests" }, 429);
+
     const { tmdb, season, ep, language, archive_md5 } = c.req.valid("query");
 
     let query = `
-      SELECT e.*, m.tmdb_id, m.season_num, m.episode_num, m.language, m.archive_md5
+      SELECT e.*, m.tmdb_id, m.season_num, m.episode_num, m.language, m.archive_md5,
+             s.source_type, s.source_uri
       FROM events e
       JOIN event_metadata m ON e.id = m.event_id
+      LEFT JOIN event_sources s ON e.id = s.event_id
       WHERE 1=1
     `;
     const params: any[] = [];
@@ -133,6 +146,11 @@ app.openapi(
     },
   }),
   async (c) => {
+    const { success } = await c.env.DEFAULT_LIMITER.limit({
+      key: c.req.header("CF-Connecting-IP") ?? "unknown",
+    });
+    if (!success) return c.json({ error: "Too many requests" }, 429);
+
     const { id: eventId } = c.req.valid("param");
 
     const blobInfo = await c.env.DB.prepare(
@@ -238,6 +256,11 @@ app.openapi(
     },
   }),
   async (c) => {
+    const { success } = await c.env.DEFAULT_LIMITER.limit({
+      key: c.req.header("CF-Connecting-IP") ?? "unknown",
+    });
+    if (!success) return c.json({ error: "Too many requests" }, 429);
+
     const pubKeyHex = c.req.header("X-SRN-PubKey");
     const signatureHex = c.req.header("X-SRN-Signature");
     if (!pubKeyHex || !signatureHex)
@@ -383,17 +406,21 @@ app.openapi(
   createRoute({
     method: "get",
     path: "/v1/tmdb/search",
-    summary: "TMDB search proxy",
+    summary: "TMDB search proxy with local title cache",
     request: {
       query: z.object({
         q: z
           .string()
           .openapi({ description: "Search query (title or keywords)" }),
+        fresh: z.string().optional().openapi({
+          description:
+            "Set to '1' to bypass local cache and query TMDB directly",
+        }),
       }),
     },
     responses: {
       200: {
-        description: "TMDB search results",
+        description: "Search results with source indicator",
         content: {
           "application/json": {
             schema: z.object({
@@ -406,6 +433,7 @@ app.openapi(
                   poster: z.string().nullable(),
                 }),
               ),
+              source: z.enum(["cache", "tmdb"]),
             }),
           },
         },
@@ -413,35 +441,73 @@ app.openapi(
       400: {
         description: "Missing query parameter",
         content: {
-          "application/json": {
-            schema: z.object({ error: z.string() }),
-          },
+          "application/json": { schema: z.object({ error: z.string() }) },
+        },
+      },
+      429: {
+        description: "Rate limit exceeded (TMDB path only)",
+        content: {
+          "application/json": { schema: z.object({ error: z.string() }) },
         },
       },
       500: {
         description: "TMDB token not configured",
         content: {
-          "application/json": {
-            schema: z.object({ error: z.string() }),
-          },
+          "application/json": { schema: z.object({ error: z.string() }) },
         },
       },
     },
   }),
   async (c) => {
-    const { q: query } = c.req.valid("query");
+    const { q: query, fresh } = c.req.valid("query");
+    const keyword = query.trim();
+
+    // Local title cache: substring match (skip when fresh=1)
+    if (fresh !== "1") {
+      const { results: rows } = await c.env.DB.prepare(
+        "SELECT tmdb_id, name, type, year, poster FROM tmdb_title_cache WHERE name LIKE ? LIMIT 10",
+      )
+        .bind(`%${keyword}%`)
+        .all<{
+          tmdb_id: number;
+          name: string;
+          type: string;
+          year: string;
+          poster: string;
+        }>();
+
+      if (rows.length > 0) {
+        return c.json({
+          results: rows.map((r) => ({
+            id: r.tmdb_id,
+            name: r.name,
+            type: r.type,
+            year: r.year,
+            poster: r.poster || null,
+          })),
+          source: "cache" as const,
+        });
+      }
+    }
+
+    // Cache miss or forced refresh — rate limit before hitting TMDB
+    const { success } = await c.env.SEARCH_LIMITER.limit({
+      key: c.req.header("CF-Connecting-IP") ?? "unknown",
+    });
+    if (!success) return c.json({ error: "Too many requests" }, 429);
 
     const token = c.env.TMDB_TOKEN;
     if (!token) return c.json({ error: "TMDB_TOKEN not configured" }, 500);
 
-    const url = `https://api.themoviedb.org/3/search/multi?query=${encodeURIComponent(query)}&language=zh-CN&include_adult=false`;
-
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        accept: "application/json",
+    const response = await fetch(
+      `https://api.themoviedb.org/3/search/multi?query=${encodeURIComponent(keyword)}&language=zh-CN&include_adult=false`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          accept: "application/json",
+        },
       },
-    });
+    );
 
     if (!response.ok) {
       const errorBody = await response.text();
@@ -456,21 +522,87 @@ app.openapi(
     }
 
     const data: any = await response.json();
-    const filtered = data.results
-      .filter((r: any) => r.media_type === "movie" || r.media_type === "tv")
-      .map((r: any) => ({
-        id: r.id,
-        name: r.name || r.title,
-        type: r.media_type,
-        year: (r.first_air_date || r.release_date || "").split("-")[0],
+    const filtered = (data.results as any[])
+      .filter((r) => r.media_type === "movie" || r.media_type === "tv")
+      .map((r) => ({
+        id: r.id as number,
+        name: (r.name || r.title) as string,
+        type: r.media_type as string,
+        year: ((r.first_air_date || r.release_date || "") as string).split(
+          "-",
+        )[0],
         poster: r.poster_path
           ? `https://image.tmdb.org/t/p/w92${r.poster_path}`
           : null,
       }));
 
-    return c.json({ results: filtered });
+    // Upsert each title into knowledge base (fire-and-forget)
+    const now = Math.floor(Date.now() / 1000);
+    c.executionCtx.waitUntil(
+      c.env.DB.batch(
+        filtered.map((r) =>
+          c.env.DB.prepare(
+            "INSERT OR REPLACE INTO tmdb_title_cache (tmdb_id, name, type, year, poster, cached_at) VALUES (?, ?, ?, ?, ?, ?)",
+          ).bind(r.id, r.name, r.type, r.year, r.poster ?? "", now),
+        ),
+      ),
+    );
+
+    return c.json({ results: filtered, source: "tmdb" as const });
   },
 );
+
+// 5. TMDB Season Episode Count
+app.get("/v1/tmdb/season", async (c) => {
+  const tmdbId = c.req.query("tmdb_id");
+  const seasonNum = c.req.query("season");
+  if (!tmdbId || !seasonNum)
+    return c.json({ error: "Missing tmdb_id or season" }, 400);
+
+  // Permanent cache lookup
+  const cached = await c.env.DB.prepare(
+    "SELECT episode_count FROM tmdb_season_cache WHERE tmdb_id = ? AND season_num = ?",
+  )
+    .bind(Number(tmdbId), Number(seasonNum))
+    .first<{ episode_count: number }>();
+  if (cached)
+    return c.json({ episode_count: cached.episode_count, source: "cache" });
+
+  // Cache miss — rate limit before hitting TMDB
+  const { success } = await c.env.SEARCH_LIMITER.limit({
+    key: c.req.header("CF-Connecting-IP") ?? "unknown",
+  });
+  if (!success) return c.json({ error: "Too many requests" }, 429);
+
+  const token = c.env.TMDB_TOKEN;
+  if (!token) return c.json({ error: "TMDB_TOKEN not configured" }, 500);
+
+  const response = await fetch(
+    `https://api.themoviedb.org/3/tv/${tmdbId}/season/${seasonNum}`,
+    {
+      headers: { Authorization: `Bearer ${token}`, accept: "application/json" },
+    },
+  );
+  if (!response.ok) return c.json({ error: "TMDB fetch failed" }, 502);
+
+  const data: any = await response.json();
+  const episodeCount: number = (data.episodes ?? []).length;
+
+  c.executionCtx.waitUntil(
+    c.env.DB.prepare(
+      "INSERT OR REPLACE INTO tmdb_season_cache (tmdb_id, season_num, episode_count, cached_at) VALUES (?, ?, ?, ?)",
+    )
+      .bind(
+        Number(tmdbId),
+        Number(seasonNum),
+        episodeCount,
+        Math.floor(Date.now() / 1000),
+      )
+      .run(),
+  );
+
+  return c.json({ episode_count: episodeCount, source: "tmdb" });
+});
 
 // --- Documentation ---
 

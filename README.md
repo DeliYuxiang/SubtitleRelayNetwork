@@ -1,6 +1,7 @@
 # SRN (Subtitle Relay Network) — Cloudless v2.1
 
 [![SRN Status](https://img.shields.io/endpoint?url=https://srn-worker.delibill.workers.dev/v1/health)](https://srn-worker.delibill.workers.dev)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](./LICENSE)
 
 SRN (Subtitle Relay Network) 不是一个简单的字幕库，而是一套**去中心化的状态同步协议**。它遵循 **"Dumb Relays, Smart Clients"** 设计哲学：中继节点（Relay）仅作为高性能的消息转发器与存储索引，一切过滤与逻辑由用户侧的智能客户端完成。
 

@@ -128,10 +128,23 @@ jobs:
           git ls-remote --heads origin "refs/heads/infra/provision-*" | awk '{print $2}' | sed 's|refs/heads/||' | while read branch; do
             git push origin --delete $branch || true
           done
+
+      - name: Emergency Restore (Disable Maintenance Mode)
+        if: failure() && steps.check_secrets.outputs.mode == 'deploy'
+        run: |
+          cd worker
+          sed -i "s/srn-d1-name-placeholder/${{ secrets.SRN_D1_NAME }}/g" wrangler.jsonc
+          sed -i "s/srn-d1-id-placeholder/${{ secrets.SRN_D1_ID }}/g" wrangler.jsonc
+          sed -i "s/srn-r2-name-placeholder/${{ secrets.SRN_R2_NAME }}/g" wrangler.jsonc
+          sed -i "s/srn-backup-r2-name-placeholder/${{ secrets.SRN_BACKUP_R2_NAME }}/g" wrangler.jsonc
+          
+          echo "::warning::Deployment failed. Forcing maintenance mode OFF..."
+          npx wrangler deploy --var MAINTENANCE_MODE:false
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WRANGLER_NON_INTERACTIVE: "true"
 
       # --- MODE B: Bootstrap ---
       - name: Infrastructure Bootstrap

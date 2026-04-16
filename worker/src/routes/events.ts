@@ -1,7 +1,20 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { Bindings } from "../types";
+import {
+  verifySignedRequest,
+  verifyDownloadRequest,
+} from "../lib/verify-pubkey";
 
 const events = new OpenAPIHono<{ Bindings: Bindings }>();
+
+const authHeaders = z.object({
+  "x-srn-pubkey": z
+    .string()
+    .optional()
+    .describe("Client Ed25519 public key (hex)"),
+  "x-srn-nonce": z.string().optional().describe("Proof-of-Work nonce"),
+  "x-srn-signature": z.string().optional().describe("Request signature (hex)"),
+});
 
 // 1. Search
 events.openapi(
@@ -10,6 +23,7 @@ events.openapi(
     path: "/v1/events",
     summary: "Search events",
     request: {
+      headers: authHeaders,
       query: z
         .object({
           tmdb: z.string().optional(),
@@ -33,9 +47,21 @@ events.openapi(
           },
         },
       },
+      401: { description: "Signature verification failed" },
+      403: { description: "PoW verification failed" },
     },
   }),
   async (c) => {
+    const authResult = await verifySignedRequest(
+      c,
+      c.req.header("X-SRN-PubKey") ?? "",
+    );
+    if (!authResult.ok)
+      return c.json(
+        { error: authResult.error, challenge: authResult.challenge },
+        authResult.status,
+      );
+
     const { success } = await c.env.SEARCH_LIMITER.limit({
       key: c.req.header("CF-Connecting-IP") ?? "unknown",
     });
@@ -104,6 +130,7 @@ events.openapi(
     path: "/v1/events/:id/content",
     summary: "Download subtitle file",
     request: {
+      headers: authHeaders,
       params: z.object({ id: z.string() }),
     },
     responses: {
@@ -111,13 +138,19 @@ events.openapi(
         description: "Subtitle file",
         content: { "application/octet-stream": { schema: z.any() } },
       },
-      404: {
-        description: "Not found",
-        content: { "application/json": { schema: z.any() } },
-      },
+      401: { description: "Auth expired" },
+      403: { description: "PoW verification failed" },
+      404: { description: "Not found" },
     },
   }),
   async (c) => {
+    const authResult = await verifyDownloadRequest(c);
+    if (!authResult.ok)
+      return c.json(
+        { error: authResult.error, challenge: authResult.challenge },
+        authResult.status,
+      );
+
     const { success } = await c.env.CONTENT_LIMITER.limit({
       key: c.req.header("CF-Connecting-IP") ?? "unknown",
     });
@@ -148,10 +181,7 @@ events.openapi(
     path: "/v1/events",
     summary: "Publish event",
     request: {
-      headers: z.object({
-        "x-srn-pubkey": z.string(),
-        "x-srn-signature": z.string(),
-      }),
+      headers: authHeaders,
       body: {
         required: true,
         content: {
@@ -170,26 +200,12 @@ events.openapi(
           },
         },
       },
-      400: {
-        description: "Bad Request",
-        content: {
-          "application/json": { schema: z.object({ error: z.string() }) },
-        },
-      },
-      401: {
-        description: "Unauthorized",
-        content: {
-          "application/json": { schema: z.object({ error: z.string() }) },
-        },
-      },
+      400: { description: "Bad Request" },
+      401: { description: "Unauthorized" },
+      403: { description: "PoW verification failed" },
     },
   }),
   async (c) => {
-    const pubKeyHex = c.req.header("X-SRN-PubKey");
-    const signatureHex = c.req.header("X-SRN-Signature");
-    if (!pubKeyHex || !signatureHex)
-      return c.json({ error: "Missing auth headers" }, 401);
-
     const { event: eventJsonStr, file: rawFile } = c.req.valid("form");
     const file = rawFile as File | undefined;
 
@@ -200,39 +216,25 @@ events.openapi(
       return c.json({ error: "Invalid JSON" }, 400);
     }
 
-    // Crypto Verify — canonical form: JSON([pubkey, kind, canonical_tags, content_md5])
-    // canonical_tags = tags minus source_type/source_uri, sorted ascending by tag[0].
-    // JSON.stringify produces UTF-8 without HTML escaping, matching Go's canonicalJSON().
-    try {
-      const encoder = new TextEncoder();
-      const publicKey = await crypto.subtle.importKey(
-        "raw",
-        new Uint8Array(pubKeyHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16))),
-        { name: "NODE-ED25519", namedCurve: "NODE-ED25519" },
-        true,
-        ["verify"],
+    const canonicalTags = ((eventObj.tags as string[][] | undefined) || [])
+      .filter((t) => t[0] !== "source_type" && t[0] !== "source_uri")
+      .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    const canonicalMsg = JSON.stringify([
+      eventObj.pubkey,
+      eventObj.kind ?? 1001,
+      canonicalTags,
+      eventObj.content_md5 ?? "",
+    ]);
+
+    const authResult = await verifySignedRequest(c, canonicalMsg);
+    if (!authResult.ok)
+      return c.json(
+        { error: authResult.error, challenge: authResult.challenge },
+        authResult.status,
       );
-      const canonicalTags = ((eventObj.tags as string[][] | undefined) || [])
-        .filter((t) => t[0] !== "source_type" && t[0] !== "source_uri")
-        .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-      const canonicalMsg = JSON.stringify([
-        eventObj.pubkey,
-        eventObj.kind ?? 1001,
-        canonicalTags,
-        eventObj.content_md5 ?? "",
-      ]);
-      const verified = await crypto.subtle.verify(
-        "NODE-ED25519",
-        publicKey,
-        new Uint8Array(
-          signatureHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)),
-        ),
-        encoder.encode(canonicalMsg),
-      );
-      if (!verified) throw new Error("Sig mismatch");
-    } catch (e) {
-      return c.json({ error: "Verification failed" }, 401);
-    }
+
+    const { pubKeyHex } = authResult;
+    const signatureHex = c.req.header("X-SRN-Signature")!;
 
     const kind = eventObj.kind || 1001;
     const hasContent = kind === 1001 || kind === 1003;
@@ -289,7 +291,6 @@ events.openapi(
     const isNew = eventRes.meta.changes > 0;
     const statements: D1PreparedStatement[] = [];
 
-    // Increment counter if new event
     if (isNew) {
       statements.push(
         c.env.DB.prepare(
@@ -299,7 +300,6 @@ events.openapi(
       );
     }
 
-    // Lifecycle
     if (kind === 1002 || kind === 1003) {
       const targetId = (eventObj.tags || []).find(
         (t: any) => t[0] === "e",
@@ -320,7 +320,6 @@ events.openapi(
       }
     }
 
-    // Alias
     if (kind === 1011) {
       const alias = (eventObj.tags || []).find(
         (t: any) => t[0] === "alias",
@@ -346,7 +345,6 @@ events.openapi(
       }
     }
 
-    // Metadata & Sources
     if (hasContent) {
       statements.push(
         c.env.DB.prepare(

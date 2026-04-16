@@ -4,6 +4,7 @@ import { Bindings, RELAY_VERSION } from "./types";
 import ui from "./routes/ui";
 import tmdb from "./routes/tmdb";
 import events from "./routes/events";
+import challenge from "./routes/challenge";
 import { relaySignMiddleware } from "./middleware/relay-sign";
 
 const app = new OpenAPIHono<{ Bindings: Bindings }>();
@@ -26,6 +27,7 @@ app.use("*", relaySignMiddleware);
 app.route("/", ui);
 app.route("/", tmdb);
 app.route("/", events);
+app.route("/", challenge);
 
 // Documentation
 app.doc("/doc", {

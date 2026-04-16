@@ -191,7 +191,9 @@ events.openapi(
       return c.json({ error: "Invalid JSON" }, 400);
     }
 
-    // Crypto Verify
+    // Crypto Verify — canonical form: JSON([pubkey, kind, canonical_tags, content_md5])
+    // canonical_tags = tags minus source_type/source_uri, sorted ascending by tag[0].
+    // JSON.stringify produces UTF-8 without HTML escaping, matching Go's canonicalJSON().
     try {
       const encoder = new TextEncoder();
       const publicKey = await crypto.subtle.importKey(
@@ -201,13 +203,22 @@ events.openapi(
         true,
         ["verify"],
       );
+      const canonicalTags = ((eventObj.tags as string[][] | undefined) || [])
+        .filter((t) => t[0] !== "source_type" && t[0] !== "source_uri")
+        .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+      const canonicalMsg = JSON.stringify([
+        eventObj.pubkey,
+        eventObj.kind ?? 1001,
+        canonicalTags,
+        eventObj.content_md5 ?? "",
+      ]);
       const verified = await crypto.subtle.verify(
         "NODE-ED25519",
         publicKey,
         new Uint8Array(
           signatureHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)),
         ),
-        encoder.encode(eventJsonStr),
+        encoder.encode(canonicalMsg),
       );
       if (!verified) throw new Error("Sig mismatch");
     } catch (e) {

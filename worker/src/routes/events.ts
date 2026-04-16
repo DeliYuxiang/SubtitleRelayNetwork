@@ -10,15 +10,19 @@ events.openapi(
     path: "/v1/events",
     summary: "Search events",
     request: {
-      query: z.object({
-        tmdb: z.string().optional(),
-        season: z.string().optional(),
-        ep: z.string().optional(),
-        language: z.string().optional(),
-        kind: z.string().optional(),
-        pubkey: z.string().optional(),
-        archive_md5: z.string().optional(),
-      }),
+      query: z
+        .object({
+          tmdb: z.string().optional(),
+          season: z.string().optional(),
+          ep: z.string().optional(),
+          language: z.string().optional(),
+          kind: z.string().optional(),
+          pubkey: z.string().optional(),
+          archive_md5: z.string().optional(),
+        })
+        .refine((q) => !(q.season || q.ep) || !!q.tmdb, {
+          message: "tmdb is required when season or ep is specified",
+        }),
     },
     responses: {
       200: {

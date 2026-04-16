@@ -477,10 +477,17 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
 
         Vue.createApp({
             setup() {
-                // shallowReactive keeps top-level properties reactive while
-                // leaving nested objects (CryptoKey, etc.) as raw values.
-                // Vue.reactive() deep-proxies CryptoKey, which breaks WebCrypto.
+                // shallowReactive: top-level properties are reactive; nested objects
+                // (CryptoKey, etc.) are left as raw values so WebCrypto works.
                 const app = Vue.shallowReactive(initApp());
+
+                // Bind every method to app so "this" is always the shallowReactive
+                // object — Vue 3 Composition API does not guarantee this == component
+                // proxy inside setup-returned functions.
+                const bound = {};
+                Object.keys(app).forEach(k => {
+                    if (typeof app[k] === 'function') bound[k] = app[k].bind(app);
+                });
 
                 const groupedResults = Vue.computed(() => {
                     const groups = {};
@@ -501,7 +508,8 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
 
                 Vue.onMounted(() => app.init());
 
-                return { ...Vue.toRefs(app), groupedResults };
+                // toRefs exposes reactive data; bound overrides the unbound method refs from toRefs.
+                return { ...Vue.toRefs(app), ...bound, groupedResults };
             }
         }).mount('#app');
     </script>

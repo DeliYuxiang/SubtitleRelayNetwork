@@ -118,8 +118,10 @@ jobs:
           # 0. SECRETS: Apply sensitive keys to Cloudflare Worker
           printf '%s' "$RELAY_PRIVATE_KEY" | npx wrangler secret put RELAY_PRIVATE_KEY
 
-          # Ensure backup bucket has a lifecycle rule (best-effort — non-blocking)
+          # Ensure backup bucket has a lifecycle rule (remove-then-add for idempotency)
           BACKUP_RETENTION=${{ vars.SRN_BACKUP_RETENTION_DAYS || 90 }}
+          npx wrangler r2 bucket lifecycle remove ${{ secrets.SRN_BACKUP_R2_NAME }} \
+            --id "expire-old-backups" 2>/dev/null || true
           npx wrangler r2 bucket lifecycle add ${{ secrets.SRN_BACKUP_R2_NAME }} \
             --id "expire-old-backups" \
             --expire-days $BACKUP_RETENTION \
@@ -245,8 +247,10 @@ jobs:
           npx wrangler r2 bucket create $BACKUP_R2_NAME &>/dev/null || true
           npx wrangler d1 create $DB_NAME &>/dev/null || true
 
-          # Set backup retention lifecycle rule (best-effort — non-blocking)
+          # Set backup retention lifecycle rule (remove-then-add for idempotency)
           BACKUP_RETENTION=${{ vars.SRN_BACKUP_RETENTION_DAYS || 90 }}
+          npx wrangler r2 bucket lifecycle remove $BACKUP_R2_NAME \
+            --id "expire-old-backups" 2>/dev/null || true
           npx wrangler r2 bucket lifecycle add $BACKUP_R2_NAME \
             --id "expire-old-backups" \
             --expire-days $BACKUP_RETENTION \

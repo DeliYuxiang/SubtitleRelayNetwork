@@ -414,7 +414,7 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                         const res = await this.srnFetch(url);
                         const data = await res.json();
                         this.suggestions = data.results || [];
-                    } catch (e) {}
+                    } catch (e) { console.error('fetchSuggestions:', e); }
                 },
 
                 async selectSuggestion(s) {
@@ -448,6 +448,7 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                         const data = await res.json();
                         this.results = data.events || [];
                     } catch (e) {
+                        console.error('fetchEvents:', e);
                     } finally {
                         this.loading = false;
                     }
@@ -476,9 +477,10 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
 
         Vue.createApp({
             setup() {
-                // MUST call Vue.reactive() before any method calls so that
-                // "this" inside init/onInput/etc. refers to the reactive proxy.
-                const app = Vue.reactive(initApp());
+                // shallowReactive keeps top-level properties reactive while
+                // leaving nested objects (CryptoKey, etc.) as raw values.
+                // Vue.reactive() deep-proxies CryptoKey, which breaks WebCrypto.
+                const app = Vue.shallowReactive(initApp());
 
                 const groupedResults = Vue.computed(() => {
                     const groups = {};

@@ -43,10 +43,10 @@ events.openapi(
     let query = `
       SELECT e.*, m.tmdb_id, m.season_num, m.episode_num, m.language, m.archive_md5,
              s.source_type, s.source_uri
-      FROM events e
-      LEFT JOIN event_metadata m ON e.id = m.event_id
+      FROM event_metadata m
+      JOIN events e ON e.id = m.event_id
       LEFT JOIN event_sources s ON e.id = s.event_id
-      WHERE NOT EXISTS (SELECT 1 FROM event_lifecycle WHERE event_id = e.id)
+      WHERE NOT EXISTS (SELECT 1 FROM event_lifecycle WHERE event_id = m.event_id)
     `;
     const params: any[] = [];
 

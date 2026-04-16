@@ -118,6 +118,12 @@ jobs:
           fi
           echo "::notice::Currently deployed SHA: $SHORT_SHA"
 
+          HEAD_SHA=$(git rev-parse --short HEAD)
+          if [ "$SHORT_SHA" = "$HEAD_SHA" ]; then
+            echo "::notice::Live worker already at ${HEAD_SHA} — skipping backup and deploy."
+            exit 0
+          fi
+
           echo "::notice::Enabling Maintenance Mode before backup..."
           npx wrangler deploy --var MAINTENANCE_MODE:true --var COMMIT_SHA:$SHORT_SHA
 

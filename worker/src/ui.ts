@@ -30,8 +30,8 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
             line-height: 1.5;
             -webkit-font-smoothing: antialiased;
         }
-        .container { max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem; }
-        
+        .container { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem; }
+
         /* Navbar */
         .navbar {
             display: flex;
@@ -40,7 +40,7 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
             margin-bottom: 4rem;
         }
         .logo { font-weight: 600; letter-spacing: -0.025em; font-size: 1.25rem; }
-        
+
         /* Hero */
         .hero { text-align: center; margin-bottom: 4rem; }
         .hero h1 { font-size: 3rem; font-weight: 600; margin-bottom: 1rem; color: #0f172a; }
@@ -134,31 +134,147 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
         .suggestion-info h4 { font-size: 0.9rem; margin-bottom: 0.1rem; }
         .suggestion-info p { font-size: 0.75rem; color: #64748b; }
 
-        /* Results */
+        /* Results: Season Cards */
         .results-grid { display: grid; gap: 1.5rem; }
-        .pack-card {
+        .season-card {
             background: white;
             border-radius: 1rem;
             border: 1px solid var(--border);
-            padding: 1.5rem;
+            overflow: hidden;
         }
-        .pack-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem; }
-        .pack-title h3 { font-size: 1.125rem; margin-bottom: 0.25rem; }
-        .pack-meta { display: flex; gap: 1rem; font-size: 0.875rem; color: #64748b; }
-        
-        .episode-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; }
+        .season-header {
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+            background: #f8fafc;
+            font-size: 1rem;
+            font-weight: 600;
+            color: #0f172a;
+        }
+
+        /* Language Group */
+        .lang-group { border-bottom: 1px solid var(--border); }
+        .lang-group:last-child { border-bottom: none; }
+        .lang-group-header {
+            padding: 0.75rem 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.625rem;
+            background: white;
+        }
+        .ep-count {
+            font-size: 0.78rem;
+            color: #64748b;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .pack-btn {
+            margin-left: auto;
+            background: #f1f5f9;
+            color: var(--text);
+            font-size: 0.75rem;
+            padding: 0.35rem 0.875rem;
+            border-radius: 0.375rem;
+        }
+
+        /* Source type (字幕组) sub-group */
+        .source-group { border-top: 1px dashed var(--border); }
+        .source-group:first-child { border-top: none; }
+        .source-group-header {
+            padding: 0.4rem 1.5rem 0;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .source-type-badge {
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: #0f172a;
+            background: #f1f5f9;
+            padding: 0.15rem 0.5rem;
+            border-radius: 0.25rem;
+            border: 1px solid var(--border);
+        }
+
+        /* Episode List */
+        .episode-list { padding: 0.4rem 1.5rem 0.875rem; display: grid; gap: 0.4rem; }
         .episode-item {
-            padding: 0.75rem;
+            padding: 0.5rem 0.75rem;
             background: #f8fafc;
             border-radius: 0.5rem;
             border: 1px solid var(--border);
-            font-size: 0.875rem;
             display: flex;
-            justify-content: space-between;
             align-items: center;
+            gap: 0.625rem;
+            font-size: 0.8rem;
         }
         .episode-item:hover { border-color: var(--primary); }
-        .dl-icon { color: #94a3b8; cursor: pointer; }
+
+        .ep-num {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 500;
+            font-size: 0.82rem;
+            min-width: 2.4rem;
+            color: #0f172a;
+        }
+        .ep-meta {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            flex: 1;
+            flex-wrap: wrap;
+            min-width: 0;
+        }
+
+        /* Source link — highlighted, clickable */
+        .source-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.2rem;
+            color: #2563eb;
+            text-decoration: none;
+            font-size: 0.72rem;
+            font-weight: 500;
+            background: #eff6ff;
+            padding: 0.15rem 0.45rem;
+            border-radius: 0.25rem;
+            border: 1px solid #bfdbfe;
+            white-space: nowrap;
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            flex-shrink: 0;
+        }
+        .source-link:hover { background: #dbeafe; border-color: #93c5fd; }
+
+        /* Pubkey badge — highlighted in purple */
+        .pubkey-badge {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.68rem;
+            color: #7c3aed;
+            background: #f5f3ff;
+            padding: 0.15rem 0.45rem;
+            border-radius: 0.25rem;
+            border: 1px solid #ddd6fe;
+            cursor: default;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 160px;
+        }
+
+        /* Archive MD5 badge */
+        .archive-badge {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.68rem;
+            color: #0369a1;
+            background: #f0f9ff;
+            padding: 0.15rem 0.45rem;
+            border-radius: 0.25rem;
+            border: 1px solid #bae6fd;
+            cursor: default;
+            white-space: nowrap;
+        }
+
+        .dl-icon { margin-left: auto; color: #94a3b8; cursor: pointer; flex-shrink: 0; }
         .dl-icon:hover { color: var(--primary); }
 
         .tag { font-size: 0.7rem; padding: 0.1rem 0.4rem; border-radius: 4px; background: #f1f5f9; color: #475569; font-weight: 500; }
@@ -222,32 +338,43 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
             </div>
 
             <div v-if="loading" class="results-grid">
-                <div v-for="i in 3" class="pack-card loading-shimmer" style="height: 200px;"></div>
+                <div v-for="i in 3" class="season-card loading-shimmer" style="height: 200px;"></div>
             </div>
 
             <div v-else class="results-grid">
-                <div v-for="pack in groupedResults" :key="pack.id" class="pack-card">
-                    <div class="pack-header">
-                        <div class="pack-title">
-                            <h3>{{ pack.title }}</h3>
-                            <div class="pack-meta">
-                                <span>第 {{ pack.season }} 季</span>
-                                <span>{{ pack.items.length }} 个文件</span>
-                                <span class="tag">{{ pack.items[0].source_type }}</span>
-                            </div>
-                        </div>
-                        <button style="background: #f1f5f9; color: var(--text); font-size: 0.8rem;" @click="downloadPack(pack)">打包下载</button>
+                <div v-for="season in groupedResults" :key="season.season" class="season-card">
+                    <div class="season-header">
+                        {{ season.season != null ? '第 ' + season.season + ' 季' : '电影' }}
                     </div>
-                    
-                    <div class="episode-list">
-                        <div v-for="item in pack.items" :key="item.id" class="episode-item">
-                            <div style="display: flex; align-items: center; gap: 0.5rem;">
-                                <span style="font-weight: 500; font-family: 'JetBrains Mono';">E{{ item.episode_num }}</span>
-                                <span class="tag tag-lang">{{ item.language }}</span>
+
+                    <div v-for="(langGroup, lang) in season.languages" :key="lang" class="lang-group">
+                        <div class="lang-group-header">
+                            <span class="tag tag-lang">{{ lang }}</span>
+                            <span class="ep-count">
+                                {{ langGroup.items.length }}<template v-if="seasonCounts[season.season] != null"> / {{ seasonCounts[season.season] }}</template> ep
+                            </span>
+                            <button class="pack-btn" @click="downloadLangPack(season.season, lang, langGroup.items)">打包下载</button>
+                        </div>
+                        <div v-for="(srcGroup, srcType) in langGroup.groups" :key="srcType" class="source-group">
+                            <div class="source-group-header">
+                                <span class="source-type-badge">{{ srcType }}</span>
                             </div>
-                            <svg class="dl-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" @click="downloadSingle(item)">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v4M7 10l5 5 5-5M12 15V3"/>
-                            </svg>
+                            <div class="episode-list">
+                                <div v-for="item in srcGroup.items" :key="item.id" class="episode-item">
+                                    <span class="ep-num">E{{ String(item.episode_num ?? '?').padStart(2, '0') }}</span>
+                                    <div class="ep-meta">
+                                        <a v-if="item.source_uri" :href="item.source_uri" target="_blank" rel="noopener" class="source-link" :title="item.source_uri">
+                                            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                                            {{ item.source_uri.replace(/^https?:\\/\\/([^\\/]+).*/, '$1') }}
+                                        </a>
+                                        <span class="pubkey-badge" :title="item.pubkey">{{ item.pubkey.substring(0, 16) }}…</span>
+                                        <span v-if="item.archive_md5" class="archive-badge" :title="'archive: ' + item.archive_md5">{{ item.archive_md5.substring(0, 10) }}…</span>
+                                    </div>
+                                    <svg class="dl-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" @click="downloadSingle(item)">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+                                    </svg>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -324,7 +451,7 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                 seasonCounts: {},
                 stats: { totalEvents: ${stats.totalEvents} },
                 debounceTimer: null,
-                
+
                 identity: null,
                 privKey: null,
                 powWorking: false,
@@ -373,7 +500,7 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                         'X-SRN-PubKey': this.identity.pubHex,
                         'X-SRN-Nonce': this.currentChallenge.nonce
                     };
-                    
+
                     // Simple self-signature for search (message = pubkey)
                     const sig = await crypto.subtle.sign('Ed25519', this.privKey, new TextEncoder().encode(this.identity.pubHex));
                     headers['X-SRN-Signature'] = await srnBytesToHex(sig);
@@ -388,7 +515,7 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                         'X-SRN-PubKey': this.identity.pubHex,
                         'X-SRN-Nonce': this.currentChallenge.nonce
                     };
-                    
+
                     // Download signature uses minute timestamp for higher security
                     const minute = String(Math.floor(Date.now() / 60000));
                     const sig = await crypto.subtle.sign('Ed25519', this.privKey, new TextEncoder().encode(minute));
@@ -443,15 +570,31 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                 async fetchEvents(id) {
                     this.loading = true;
                     this.suggestions = [];
+                    this.seasonCounts = {};
                     try {
                         const res = await this.srnFetch(\`/v1/events?tmdb=\${id}\`);
                         const data = await res.json();
                         this.results = data.events || [];
+                        // Async-fetch episode counts per season (non-blocking)
+                        const seasons = [...new Set(this.results.map(e => e.season_num).filter(s => s != null))];
+                        if (seasons.length > 0) this.fetchSeasonCounts(id, seasons);
                     } catch (e) {
                         console.error('fetchEvents:', e);
                     } finally {
                         this.loading = false;
                     }
+                },
+
+                async fetchSeasonCounts(tmdbId, seasons) {
+                    const counts = {};
+                    await Promise.all(seasons.map(async s => {
+                        try {
+                            const res = await this.srnFetch(\`/v1/tmdb/season?tmdb_id=\${tmdbId}&season=\${s}\`);
+                            const data = await res.json();
+                            counts[s] = data.episode_count;
+                        } catch(e) { counts[s] = null; }
+                    }));
+                    this.seasonCounts = counts;
                 },
 
                 async downloadSingle(item) {
@@ -464,11 +607,8 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                     a.click();
                 },
 
-                async downloadPack(pack) {
-                    // Pack download logic omitted for brevity in this refactor, 
-                    // typically involves generating a zip client-side.
-                    alert('正在打包中... (演示)');
-                    for (const item of pack.items) {
+                async downloadLangPack(season, lang, items) {
+                    for (const item of items) {
                         await this.downloadSingle(item);
                     }
                 }
@@ -489,21 +629,34 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                     if (typeof app[k] === 'function') bound[k] = app[k].bind(app);
                 });
 
+                // Group results: season → language → source_type (字幕组) → sorted episodes
                 const groupedResults = Vue.computed(() => {
-                    const groups = {};
+                    const seasons = {};
                     app.results.forEach(item => {
-                        const key = \`\${item.tmdb_id}_\${item.season_num}_\${item.source_type}\`;
-                        if (!groups[key]) {
-                            groups[key] = {
-                                id: key,
-                                title: \`TMDB \${item.tmdb_id}\`,
-                                season: item.season_num,
-                                items: []
-                            };
+                        const sKey = item.season_num != null ? item.season_num : 'movie';
+                        if (!seasons[sKey]) {
+                            seasons[sKey] = { season: item.season_num, tmdb_id: item.tmdb_id, languages: {} };
                         }
-                        groups[key].items.push(item);
+                        const lang = item.language || 'unknown';
+                        if (!seasons[sKey].languages[lang]) {
+                            seasons[sKey].languages[lang] = { items: [], groups: {} };
+                        }
+                        seasons[sKey].languages[lang].items.push(item);
+                        const src = item.source_type || 'unknown';
+                        if (!seasons[sKey].languages[lang].groups[src]) {
+                            seasons[sKey].languages[lang].groups[src] = { items: [] };
+                        }
+                        seasons[sKey].languages[lang].groups[src].items.push(item);
                     });
-                    return Object.values(groups).sort((a, b) => b.season - a.season);
+                    // Sort episodes within each source group by episode_num ascending
+                    Object.values(seasons).forEach(s => {
+                        Object.values(s.languages).forEach(lg => {
+                            Object.values(lg.groups).forEach(g => {
+                                g.items.sort((a, b) => (a.episode_num ?? 0) - (b.episode_num ?? 0));
+                            });
+                        });
+                    });
+                    return Object.values(seasons).sort((a, b) => (b.season ?? -1) - (a.season ?? -1));
                 });
 
                 Vue.onMounted(() => app.init());

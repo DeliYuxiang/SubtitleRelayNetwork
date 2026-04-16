@@ -134,151 +134,138 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
         .suggestion-info h4 { font-size: 0.9rem; margin-bottom: 0.1rem; }
         .suggestion-info p { font-size: 0.75rem; color: #64748b; }
 
-        /* Results: Season Cards */
-        .results-grid { display: grid; gap: 1.5rem; }
-        .season-card {
+        /* Results — archive cards */
+        .results-grid { display: grid; gap: 1.25rem; }
+
+        .archive-card {
             background: white;
             border-radius: 1rem;
             border: 1px solid var(--border);
             overflow: hidden;
         }
-        .season-header {
-            padding: 1rem 1.5rem;
-            border-bottom: 1px solid var(--border);
+
+        /* Archive header: title · source link ... tags */
+        .archive-header {
+            padding: 0.75rem 1.25rem;
             background: #f8fafc;
-            font-size: 1rem;
-            font-weight: 600;
-            color: #0f172a;
-        }
-
-        /* Language Group */
-        .lang-group { border-bottom: 1px solid var(--border); }
-        .lang-group:last-child { border-bottom: none; }
-        .lang-group-header {
-            padding: 0.75rem 1.5rem;
-            display: flex;
-            align-items: center;
-            gap: 0.625rem;
-            background: white;
-        }
-        .ep-count {
-            font-size: 0.78rem;
-            color: #64748b;
-            font-family: 'JetBrains Mono', monospace;
-        }
-        .pack-btn {
-            margin-left: auto;
-            background: #f1f5f9;
-            color: var(--text);
-            font-size: 0.75rem;
-            padding: 0.35rem 0.875rem;
-            border-radius: 0.375rem;
-        }
-
-        /* Source type (字幕组) sub-group */
-        .source-group { border-top: 1px dashed var(--border); }
-        .source-group:first-child { border-top: none; }
-        .source-group-header {
-            padding: 0.4rem 1.5rem 0;
+            border-bottom: 1px solid var(--border);
             display: flex;
             align-items: center;
             gap: 0.5rem;
-        }
-        .source-type-badge {
-            font-size: 0.72rem;
-            font-weight: 600;
-            color: #0f172a;
-            background: #f1f5f9;
-            padding: 0.15rem 0.5rem;
-            border-radius: 0.25rem;
-            border: 1px solid var(--border);
-        }
-
-        /* Episode List */
-        .episode-list { padding: 0.4rem 1.5rem 0.875rem; display: grid; gap: 0.4rem; }
-        .episode-item {
-            padding: 0.5rem 0.75rem;
-            background: #f8fafc;
-            border-radius: 0.5rem;
-            border: 1px solid var(--border);
-            display: flex;
-            align-items: center;
-            gap: 0.625rem;
-            font-size: 0.8rem;
-        }
-        .episode-item:hover { border-color: var(--primary); }
-
-        .ep-num {
-            font-family: 'JetBrains Mono', monospace;
-            font-weight: 500;
-            font-size: 0.82rem;
-            min-width: 2.4rem;
-            color: #0f172a;
-        }
-        .ep-meta {
-            display: flex;
-            align-items: center;
-            gap: 0.4rem;
-            flex: 1;
             flex-wrap: wrap;
-            min-width: 0;
         }
+        .archive-title {
+            font-weight: 600;
+            font-size: 0.9rem;
+            color: #0f172a;
+            white-space: nowrap;
+        }
+        .header-sep { color: #cbd5e1; }
 
-        /* Source link — highlighted, clickable */
+        /* Source link — prominent solid highlight */
         .source-link {
             display: inline-flex;
             align-items: center;
-            gap: 0.2rem;
-            color: #2563eb;
+            gap: 0.3rem;
+            color: white;
             text-decoration: none;
-            font-size: 0.72rem;
-            font-weight: 500;
-            background: #eff6ff;
-            padding: 0.15rem 0.45rem;
-            border-radius: 0.25rem;
-            border: 1px solid #bfdbfe;
+            font-size: 0.78rem;
+            font-weight: 600;
+            background: #2563eb;
+            padding: 0.25rem 0.65rem;
+            border-radius: 0.375rem;
             white-space: nowrap;
-            max-width: 200px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            flex-shrink: 0;
+            letter-spacing: 0.01em;
         }
-        .source-link:hover { background: #dbeafe; border-color: #93c5fd; }
+        .source-link:hover { background: #1d4ed8; }
 
-        /* Pubkey badge — highlighted in purple */
+        /* Header right-side tags */
+        .header-tags {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 0.375rem;
+            flex-wrap: wrap;
+        }
+        /* Pubkey badge — purple */
         .pubkey-badge {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.68rem;
+            font-size: 0.67rem;
             color: #7c3aed;
             background: #f5f3ff;
-            padding: 0.15rem 0.45rem;
+            padding: 0.18rem 0.45rem;
             border-radius: 0.25rem;
             border: 1px solid #ddd6fe;
             cursor: default;
             white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 160px;
         }
-
-        /* Archive MD5 badge */
-        .archive-badge {
+        /* Archive MD5 tag */
+        .archive-md5-tag {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.68rem;
+            font-size: 0.67rem;
             color: #0369a1;
             background: #f0f9ff;
-            padding: 0.15rem 0.45rem;
+            padding: 0.18rem 0.45rem;
             border-radius: 0.25rem;
             border: 1px solid #bae6fd;
             cursor: default;
             white-space: nowrap;
         }
 
-        .dl-icon { margin-left: auto; color: #94a3b8; cursor: pointer; flex-shrink: 0; }
-        .dl-icon:hover { color: var(--primary); }
+        /* Season-language rows inside a card */
+        .sl-row {
+            padding: 0.75rem 1.25rem;
+            border-top: 1px solid var(--border);
+        }
+        .sl-row:first-child { border-top: none; }
 
-        .tag { font-size: 0.7rem; padding: 0.1rem 0.4rem; border-radius: 4px; background: #f1f5f9; color: #475569; font-weight: 500; }
+        .sl-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+            flex-wrap: wrap;
+        }
+        .tag { font-size: 0.72rem; padding: 0.2rem 0.5rem; border-radius: 4px; background: #f1f5f9; color: #475569; font-weight: 600; }
+        .tag-season { background: #fef9c3; color: #854d0e; }
         .tag-lang { background: #dbeafe; color: #1e40af; }
+        .ep-count {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            color: #64748b;
+        }
+        .pack-btn {
+            margin-left: auto;
+            background: #f1f5f9;
+            color: var(--text);
+            font-size: 0.72rem;
+            padding: 0.3rem 0.75rem;
+            border-radius: 0.375rem;
+        }
+
+        /* Episode pills */
+        .ep-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.375rem;
+        }
+        .ep-pill {
+            background: #f8fafc;
+            color: #334155;
+            border: 1px solid var(--border);
+            border-radius: 0.375rem;
+            padding: 0.25rem 0.6rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s, color 0.15s;
+        }
+        .ep-pill:hover {
+            background: #eff6ff;
+            border-color: var(--primary);
+            color: var(--primary);
+        }
 
         /* Loading */
         .loading-shimmer {
@@ -338,45 +325,46 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
             </div>
 
             <div v-if="loading" class="results-grid">
-                <div v-for="i in 3" class="season-card loading-shimmer" style="height: 200px;"></div>
+                <div v-for="i in 3" class="archive-card loading-shimmer" style="height: 140px;"></div>
             </div>
 
             <div v-else class="results-grid">
-                <div v-for="season in groupedResults" :key="season.season" class="season-card">
-                    <div class="season-header">
-                        {{ season.season != null ? '第 ' + season.season + ' 季' : '电影' }}
+                <div v-for="archive in groupedResults" :key="archive.key" class="archive-card">
+
+                    <!-- Archive header: title · source link (highlighted) … right tags -->
+                    <div class="archive-header">
+                        <span class="archive-title">{{ currentTitle || ('TMDB\u00a0' + archive.tmdb_id) }}</span>
+                        <template v-if="archive.source_uri">
+                            <span class="header-sep">·</span>
+                            <a :href="archive.source_uri" target="_blank" rel="noopener" class="source-link" :title="archive.source_uri">
+                                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                                {{ archive.source_uri.replace(/^https?:\\/\\/([^\\/]+).*/, '$1') }}
+                            </a>
+                        </template>
+                        <div class="header-tags">
+                            <span v-if="archive.source_type" class="tag">{{ archive.source_type }}</span>
+                            <span v-if="archive.archive_md5" class="archive-md5-tag" :title="'archive: ' + archive.archive_md5">{{ archive.archive_md5.substring(0, 10) }}…</span>
+                            <span class="pubkey-badge" :title="archive.pubkey">{{ archive.pubkey.substring(0, 16) }}…</span>
+                        </div>
                     </div>
 
-                    <div v-for="(langGroup, lang) in season.languages" :key="lang" class="lang-group">
-                        <div class="lang-group-header">
-                            <span class="tag tag-lang">{{ lang }}</span>
-                            <span class="ep-count">
-                                {{ langGroup.items.length }}<template v-if="seasonCounts[season.season] != null"> / {{ seasonCounts[season.season] }}</template> ep
-                            </span>
-                            <button class="pack-btn" @click="downloadLangPack(season.season, lang, langGroup.items)">打包下载</button>
-                        </div>
-                        <div v-for="(srcGroup, srcType) in langGroup.groups" :key="srcType" class="source-group">
-                            <div class="source-group-header">
-                                <span class="source-type-badge">{{ srcType }}</span>
+                    <!-- Season-language rows -->
+                    <div v-for="(season, sKey) in archive.seasons" :key="sKey" class="sl-row">
+                        <div v-for="(langGroup, lang) in season.languages" :key="lang">
+                            <div class="sl-header">
+                                <span class="tag tag-season">S{{ season.season != null ? String(season.season).padStart(2, '0') : '—' }}</span>
+                                <span class="tag tag-lang">{{ lang }}</span>
+                                <span class="ep-count">{{ langGroup.items.length }}<template v-if="seasonCounts[season.season] != null"> / {{ seasonCounts[season.season] }}</template> ep</span>
+                                <button class="pack-btn" @click="downloadLangPack(season.season, lang, langGroup.items)">季包下载</button>
                             </div>
-                            <div class="episode-list">
-                                <div v-for="item in srcGroup.items" :key="item.id" class="episode-item">
-                                    <span class="ep-num">E{{ String(item.episode_num ?? '?').padStart(2, '0') }}</span>
-                                    <div class="ep-meta">
-                                        <a v-if="item.source_uri" :href="item.source_uri" target="_blank" rel="noopener" class="source-link" :title="item.source_uri">
-                                            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                                            {{ item.source_uri.replace(/^https?:\\/\\/([^\\/]+).*/, '$1') }}
-                                        </a>
-                                        <span class="pubkey-badge" :title="item.pubkey">{{ item.pubkey.substring(0, 16) }}…</span>
-                                        <span v-if="item.archive_md5" class="archive-badge" :title="'archive: ' + item.archive_md5">{{ item.archive_md5.substring(0, 10) }}…</span>
-                                    </div>
-                                    <svg class="dl-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" @click="downloadSingle(item)">
-                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
-                                    </svg>
-                                </div>
+                            <div class="ep-pills">
+                                <button v-for="item in langGroup.items" :key="item.id" class="ep-pill" @click="downloadSingle(item)" :title="'下载 E' + String(item.episode_num ?? '?').padStart(2,'0')">
+                                    EP{{ String(item.episode_num ?? '?').padStart(2, '0') }}
+                                </button>
                             </div>
                         </div>
                     </div>
+
                 </div>
 
                 <div v-if="!results.length && !loading && searchInput" style="text-align: center; color: #94a3b8; padding: 4rem 0;">
@@ -399,13 +387,6 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
         async function srnBytesToHex(buf) {
             return Array.from(new Uint8Array(buf))
                 .map(b => b.toString(16).padStart(2, '0')).join('');
-        }
-
-        async function verifyPoW(salt, pubHex, nonce, k) {
-            const data = new TextEncoder().encode(salt + pubHex + nonce);
-            const hashBuf = await crypto.subtle.digest('SHA-256', data);
-            const hashHex = await srnBytesToHex(hashBuf);
-            return hashHex.startsWith('0'.repeat(k));
         }
 
         async function mineNonce(salt, pubHex, k, onAttempt) {
@@ -449,6 +430,7 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                 results: [],
                 suggestions: [],
                 seasonCounts: {},
+                currentTitle: '',
                 stats: { totalEvents: ${stats.totalEvents} },
                 debounceTimer: null,
 
@@ -500,11 +482,8 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                         'X-SRN-PubKey': this.identity.pubHex,
                         'X-SRN-Nonce': this.currentChallenge.nonce
                     };
-
-                    // Simple self-signature for search (message = pubkey)
                     const sig = await crypto.subtle.sign('Ed25519', this.privKey, new TextEncoder().encode(this.identity.pubHex));
                     headers['X-SRN-Signature'] = await srnBytesToHex(sig);
-
                     const res = await fetch(url, { ...opts, headers });
                     return this._handleAuthFailure(res, () => this.srnFetch(url, opts));
                 },
@@ -515,12 +494,9 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                         'X-SRN-PubKey': this.identity.pubHex,
                         'X-SRN-Nonce': this.currentChallenge.nonce
                     };
-
-                    // Download signature uses minute timestamp for higher security
                     const minute = String(Math.floor(Date.now() / 60000));
                     const sig = await crypto.subtle.sign('Ed25519', this.privKey, new TextEncoder().encode(minute));
                     headers['X-SRN-Signature'] = await srnBytesToHex(sig);
-
                     const res = await fetch(url, { ...opts, headers });
                     return this._handleAuthFailure(res, () => this.srnFetchDownload(url, opts));
                 },
@@ -528,10 +504,7 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                 onInput() {
                     if (this.powWorking) return;
                     clearTimeout(this.debounceTimer);
-                    if (!this.searchInput) {
-                        this.suggestions = [];
-                        return;
-                    }
+                    if (!this.searchInput) { this.suggestions = []; return; }
                     this.debounceTimer = setTimeout(() => this.fetchSuggestions(), 300);
                 },
 
@@ -545,7 +518,8 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                 },
 
                 async selectSuggestion(s) {
-                    this.searchInput = s.name || s.title;
+                    this.currentTitle = s.name || s.title || '';
+                    this.searchInput = this.currentTitle;
                     this.suggestions = [];
                     await this.fetchEvents(s.id);
                 },
@@ -559,7 +533,6 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                     } else if (this.suggestions.length > 0) {
                         await this.selectSuggestion(this.suggestions[0]);
                     } else {
-                        // suggestions not loaded yet — fetch first, then use top result
                         await this.fetchSuggestions();
                         if (this.suggestions.length > 0) {
                             await this.selectSuggestion(this.suggestions[0]);
@@ -629,34 +602,47 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
                     if (typeof app[k] === 'function') bound[k] = app[k].bind(app);
                 });
 
-                // Group results: season → language → source_type (字幕组) → sorted episodes
+                // Group by archive_md5 (top) → season_num → language → sorted episodes.
+                // Items with no archive_md5 (single-file uploads) each get their own block
+                // keyed by event id.
                 const groupedResults = Vue.computed(() => {
-                    const seasons = {};
+                    const archives = {};
                     app.results.forEach(item => {
+                        const aKey = item.archive_md5 || item.id;
+                        if (!archives[aKey]) {
+                            archives[aKey] = {
+                                key: aKey,
+                                archive_md5: item.archive_md5,
+                                source_uri: item.source_uri || null,
+                                source_type: item.source_type || null,
+                                pubkey: item.pubkey,
+                                tmdb_id: item.tmdb_id,
+                                seasons: {}
+                            };
+                        }
+                        // JS integer keys are iterated in ascending order — gives free season sort
                         const sKey = item.season_num != null ? item.season_num : 'movie';
-                        if (!seasons[sKey]) {
-                            seasons[sKey] = { season: item.season_num, tmdb_id: item.tmdb_id, languages: {} };
+                        if (!archives[aKey].seasons[sKey]) {
+                            archives[aKey].seasons[sKey] = {
+                                season: item.season_num,
+                                languages: {}
+                            };
                         }
                         const lang = item.language || 'unknown';
-                        if (!seasons[sKey].languages[lang]) {
-                            seasons[sKey].languages[lang] = { items: [], groups: {} };
+                        if (!archives[aKey].seasons[sKey].languages[lang]) {
+                            archives[aKey].seasons[sKey].languages[lang] = { items: [] };
                         }
-                        seasons[sKey].languages[lang].items.push(item);
-                        const src = item.source_type || 'unknown';
-                        if (!seasons[sKey].languages[lang].groups[src]) {
-                            seasons[sKey].languages[lang].groups[src] = { items: [] };
-                        }
-                        seasons[sKey].languages[lang].groups[src].items.push(item);
+                        archives[aKey].seasons[sKey].languages[lang].items.push(item);
                     });
-                    // Sort episodes within each source group by episode_num ascending
-                    Object.values(seasons).forEach(s => {
-                        Object.values(s.languages).forEach(lg => {
-                            Object.values(lg.groups).forEach(g => {
-                                g.items.sort((a, b) => (a.episode_num ?? 0) - (b.episode_num ?? 0));
+                    // Sort episodes within each language group by episode_num ascending
+                    Object.values(archives).forEach(a => {
+                        Object.values(a.seasons).forEach(s => {
+                            Object.values(s.languages).forEach(lg => {
+                                lg.items.sort((x, y) => (x.episode_num ?? 0) - (y.episode_num ?? 0));
                             });
                         });
                     });
-                    return Object.values(seasons).sort((a, b) => (b.season ?? -1) - (a.season ?? -1));
+                    return Object.values(archives);
                 });
 
                 Vue.onMounted(() => app.init());

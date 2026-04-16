@@ -8,6 +8,7 @@ export type Bindings = {
   TMDB_TOKEN?: string;
   SEARCH_LIMITER: RateLimit;
   DEFAULT_LIMITER: RateLimit;
+  CONTENT_LIMITER: RateLimit;
   RELAY_PUBLIC_KEY?: string;
   RELAY_PRIVATE_KEY?: string;
   COMMIT_SHA?: string;

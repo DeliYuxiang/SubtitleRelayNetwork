@@ -32,7 +32,7 @@ events.openapi(
     },
   }),
   async (c) => {
-    const { success } = await c.env.DEFAULT_LIMITER.limit({
+    const { success } = await c.env.SEARCH_LIMITER.limit({
       key: c.req.header("CF-Connecting-IP") ?? "unknown",
     });
     if (!success) return c.json({ error: "Too many requests" }, 429);
@@ -114,6 +114,11 @@ events.openapi(
     },
   }),
   async (c) => {
+    const { success } = await c.env.CONTENT_LIMITER.limit({
+      key: c.req.header("CF-Connecting-IP") ?? "unknown",
+    });
+    if (!success) return c.json({ error: "Too many requests" }, 429);
+
     const { id: eventId } = c.req.valid("param");
     const blobInfo = await c.env.DB.prepare(
       "SELECT b.r2_key FROM events e JOIN blobs b ON e.content_md5 = b.content_md5 WHERE e.id = ? AND e.content_md5 != ''",

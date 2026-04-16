@@ -118,11 +118,12 @@ jobs:
           # 0. SECRETS: Apply sensitive keys to Cloudflare Worker
           printf '%s' "$RELAY_PRIVATE_KEY" | npx wrangler secret put RELAY_PRIVATE_KEY
 
-          # Ensure backup bucket has a lifecycle rule (idempotent — replaces existing rule)
+          # Ensure backup bucket has a lifecycle rule (best-effort — non-blocking)
           BACKUP_RETENTION=${{ vars.SRN_BACKUP_RETENTION_DAYS || 90 }}
           npx wrangler r2 bucket lifecycle add ${{ secrets.SRN_BACKUP_R2_NAME }} \
             --id "expire-old-backups" \
-            --expire-days $BACKUP_RETENTION
+            --expire-days $BACKUP_RETENTION \
+            || echo "::warning::Lifecycle rule update failed (check API token R2 permissions) — continuing deployment"
           if [ -n "$TMDB_TOKEN" ]; then
             printf '%s' "$TMDB_TOKEN" | npx wrangler secret put TMDB_TOKEN
           fi
@@ -244,11 +245,12 @@ jobs:
           npx wrangler r2 bucket create $BACKUP_R2_NAME &>/dev/null || true
           npx wrangler d1 create $DB_NAME &>/dev/null || true
 
-          # Set backup retention lifecycle rule (default 90 days)
+          # Set backup retention lifecycle rule (best-effort — non-blocking)
           BACKUP_RETENTION=${{ vars.SRN_BACKUP_RETENTION_DAYS || 90 }}
           npx wrangler r2 bucket lifecycle add $BACKUP_R2_NAME \
             --id "expire-old-backups" \
-            --expire-days $BACKUP_RETENTION
+            --expire-days $BACKUP_RETENTION \
+            || echo "::warning::Lifecycle rule update failed (check API token R2 permissions) — continuing bootstrap"
           
           D1_ID=$(npx wrangler d1 list 2>/dev/null | grep "$DB_NAME" | grep -oE "[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}" | head -n 1)
           if [ -z "$D1_ID" ]; then exit 1; fi

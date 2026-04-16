@@ -40,6 +40,12 @@
         "type": "ratelimit",
         "namespace_id": "1002",
         "simple": { "limit": 999, "period": 60 }
+      },
+      {
+        "name": "CONTENT_LIMITER",
+        "type": "ratelimit",
+        "namespace_id": "1003",
+        "simple": { "limit": 6, "period": 60 }
       }
     ]
   }

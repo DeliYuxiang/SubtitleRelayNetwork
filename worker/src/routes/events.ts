@@ -3,6 +3,7 @@ import { Bindings } from "../types";
 import {
   verifySignedRequest,
   verifyDownloadRequest,
+  isVip,
 } from "../lib/verify-pubkey";
 
 const events = new OpenAPIHono<{ Bindings: Bindings }>();
@@ -62,10 +63,12 @@ events.openapi(
         authResult.status,
       );
 
-    const { success } = await c.env.SEARCH_LIMITER.limit({
-      key: c.req.header("CF-Connecting-IP") ?? "unknown",
-    });
-    if (!success) return c.json({ error: "Too many requests" }, 429);
+    if (!isVip(authResult.pubKeyHex, c.env.SRN_PUBKEY_WHITELIST ?? "")) {
+      const { success } = await c.env.SEARCH_LIMITER.limit({
+        key: c.req.header("CF-Connecting-IP") ?? "unknown",
+      });
+      if (!success) return c.json({ error: "Too many requests" }, 429);
+    }
 
     const { tmdb, season, ep, language, kind, pubkey, archive_md5 } =
       c.req.valid("query");
@@ -151,10 +154,12 @@ events.openapi(
         authResult.status,
       );
 
-    const { success } = await c.env.CONTENT_LIMITER.limit({
-      key: c.req.header("CF-Connecting-IP") ?? "unknown",
-    });
-    if (!success) return c.json({ error: "Too many requests" }, 429);
+    if (!isVip(authResult.pubKeyHex, c.env.SRN_PUBKEY_WHITELIST ?? "")) {
+      const { success } = await c.env.CONTENT_LIMITER.limit({
+        key: c.req.header("CF-Connecting-IP") ?? "unknown",
+      });
+      if (!success) return c.json({ error: "Too many requests" }, 429);
+    }
 
     const { id: eventId } = c.req.valid("param");
     const blobInfo = await c.env.DB.prepare(

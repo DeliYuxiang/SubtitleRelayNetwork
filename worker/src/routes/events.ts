@@ -35,8 +35,9 @@ events.openapi(
           pubkey: z.string().optional(),
           archive_md5: z.string().optional(),
         })
-        .refine((q) => !(q.season || q.ep) || !!q.tmdb, {
-          message: "tmdb is required when season or ep is specified",
+        .refine((q) => !!q.tmdb && (!q.ep || !!q.season), {
+          message:
+            "TMDB ID is required, and Season must be provided if Episode is specified (Unified Query Standard)",
         }),
     },
     responses: {

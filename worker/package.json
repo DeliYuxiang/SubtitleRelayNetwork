@@ -4,6 +4,10 @@
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",
+    "dev:test": "./start_local.sh",
+    "dev:test:pull": "./start_local.sh --pull",
+    "test:setup": "wrangler d1 migrations apply DB --local -c wrangler.test.jsonc",
+    "db:pull": "source .env && npx wrangler d1 export $SRN_D1_NAME --remote --output=.remote_dump.sql && npx wrangler d1 execute DB --local --file=.remote_dump.sql -c wrangler.test.jsonc && rm .remote_dump.sql",
     "deploy": "wrangler deploy",
     "test": "vitest",
     "format:check": "prettier --check \"src/**/*.ts\"",

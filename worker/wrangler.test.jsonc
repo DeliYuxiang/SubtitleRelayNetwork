@@ -27,6 +27,11 @@
   "observability": {
     "enabled": true
   },
+  "vars": {
+    "SRN_PUBKEY_WHITELIST": "",
+    "SRN_POW_DIFFICULTY": "0",
+    "SRN_POW_SECRET": "test_secret"
+  },
   "unsafe": {
     "bindings": [
       {

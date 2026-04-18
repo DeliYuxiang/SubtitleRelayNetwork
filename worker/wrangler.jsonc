@@ -27,6 +27,14 @@
   "observability": {
     "enabled": true
   },
+  "vars": {
+    // Comma-separated hex Ed25519 pubkeys for VIP bypass (no PoW required).
+    "SRN_PUBKEY_WHITELIST": "srn-pubkey-whitelist-placeholder",
+    // Base difficulty: number of leading zero hex chars required in SHA-256 hash.
+    "SRN_POW_DIFFICULTY": "srn-pow-difficulty-placeholder",
+    // Secret salt for PoW computation.
+    "SRN_POW_SECRET": "srn-pow-secret-placeholder"
+  },
   "unsafe": {
     "bindings": [
       {

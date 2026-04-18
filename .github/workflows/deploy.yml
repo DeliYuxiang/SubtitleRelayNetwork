@@ -90,6 +90,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELAY_PRIVATE_KEY: ${{ secrets.RELAY_PRIVATE_KEY }}
           RELAY_PUBLIC_KEY: ${{ secrets.RELAY_PUBLIC_KEY }}
+          TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
           WRANGLER_NON_INTERACTIVE: "true"
         run: |
           cd worker
@@ -98,16 +99,36 @@ jobs:
           sed -i "s/srn-r2-name-placeholder/${{ secrets.SRN_R2_NAME }}/g" wrangler.jsonc
           sed -i "s/srn-backup-r2-name-placeholder/${{ secrets.SRN_BACKUP_R2_NAME }}/g" wrangler.jsonc
           
-          # Dynamic Rate Limits (with defaults)
-          SEARCH_LIMIT=${{ secrets.SRN_SEARCH_LIMIT || 3 }}
-          DEFAULT_LIMIT=${{ secrets.SRN_DEFAULT_LIMIT || 999 }}
-          CONTENT_LIMIT=${{ secrets.SRN_CONTENT_LIMIT || 6 }}
+          # Dynamic Rate Limits (from GitHub Variables)
+          SEARCH_LIMIT=${{ vars.SRN_SEARCH_LIMIT || 3 }}
+          DEFAULT_LIMIT=${{ vars.SRN_DEFAULT_LIMIT || 999 }}
+          CONTENT_LIMIT=${{ vars.SRN_CONTENT_LIMIT || 6 }}
           sed -i "s/srn-search-limit-placeholder/$SEARCH_LIMIT/g" wrangler.jsonc
           sed -i "s/srn-default-limit-placeholder/$DEFAULT_LIMIT/g" wrangler.jsonc
           sed -i "s/srn-content-limit-placeholder/$CONTENT_LIMIT/g" wrangler.jsonc
 
-          # 0. KEYPAIR: Re-apply relay private key to Cloudflare Worker Secrets (branch recovery)
+          # Auth policy vars (GitHub Actions variables)
+          sed -i "s|srn-pubkey-whitelist-placeholder|${{ vars.SRN_PUBKEY_WHITELIST }}|g" wrangler.jsonc
+          sed -i "s|srn-pow-difficulty-placeholder|${{ vars.SRN_POW_DIFFICULTY || '0' }}|g" wrangler.jsonc
+          
+          # Generate a random PoW secret for this deployment
+          SRN_RANDOM_POW_SECRET=$(openssl rand -hex 16)
+          sed -i "s|srn-pow-secret-placeholder|$SRN_RANDOM_POW_SECRET|g" wrangler.jsonc
+
+          # 0. SECRETS: Apply sensitive keys to Cloudflare Worker
           printf '%s' "$RELAY_PRIVATE_KEY" | npx wrangler secret put RELAY_PRIVATE_KEY
+
+          # Ensure backup bucket has a lifecycle rule (remove-then-add for idempotency)
+          BACKUP_RETENTION=${{ vars.SRN_BACKUP_RETENTION_DAYS || 90 }}
+          npx wrangler r2 bucket lifecycle remove ${{ secrets.SRN_BACKUP_R2_NAME }} \
+            --id "expire-old-backups" 2>/dev/null || true
+          npx wrangler r2 bucket lifecycle add ${{ secrets.SRN_BACKUP_R2_NAME }} \
+            --id "expire-old-backups" \
+            --expire-days $BACKUP_RETENTION \
+            || echo "::warning::Lifecycle rule update failed (check API token R2 permissions) — continuing deployment"
+          if [ -n "$TMDB_TOKEN" ]; then
+            printf '%s' "$TMDB_TOKEN" | npx wrangler secret put TMDB_TOKEN
+          fi
 
           # 1. STOP: Query live SHA, then enable Maintenance Mode
           # The live worker exposes its baked-in COMMIT_SHA via /v1/identity
@@ -181,14 +202,20 @@ jobs:
           sed -i "s/srn-r2-name-placeholder/${{ secrets.SRN_R2_NAME }}/g" wrangler.jsonc
           sed -i "s/srn-backup-r2-name-placeholder/${{ secrets.SRN_BACKUP_R2_NAME }}/g" wrangler.jsonc
           
-          # Dynamic Rate Limits
-          SEARCH_LIMIT=${{ secrets.SRN_SEARCH_LIMIT || 3 }}
-          DEFAULT_LIMIT=${{ secrets.SRN_DEFAULT_LIMIT || 999 }}
-          CONTENT_LIMIT=${{ secrets.SRN_CONTENT_LIMIT || 6 }}
+          # Dynamic Rate Limits (from GitHub Variables)
+          SEARCH_LIMIT=${{ vars.SRN_SEARCH_LIMIT || 3 }}
+          DEFAULT_LIMIT=${{ vars.SRN_DEFAULT_LIMIT || 999 }}
+          CONTENT_LIMIT=${{ vars.SRN_CONTENT_LIMIT || 6 }}
           sed -i "s/srn-search-limit-placeholder/$SEARCH_LIMIT/g" wrangler.jsonc
           sed -i "s/srn-default-limit-placeholder/$DEFAULT_LIMIT/g" wrangler.jsonc
           sed -i "s/srn-content-limit-placeholder/$CONTENT_LIMIT/g" wrangler.jsonc
+          sed -i "s|srn-pubkey-whitelist-placeholder|${{ vars.SRN_PUBKEY_WHITELIST }}|g" wrangler.jsonc
+          sed -i "s|srn-pow-difficulty-placeholder|${{ vars.SRN_POW_DIFFICULTY || '0' }}|g" wrangler.jsonc
           
+          # Generate a random PoW secret for emergency restore
+          SRN_RANDOM_POW_SECRET=$(openssl rand -hex 16)
+          sed -i "s|srn-pow-secret-placeholder|$SRN_RANDOM_POW_SECRET|g" wrangler.jsonc
+
           echo "::warning::Deployment failed. Forcing maintenance mode OFF..."
           npx wrangler deploy --var MAINTENANCE_MODE:false
         env:
@@ -219,6 +246,15 @@ jobs:
           npx wrangler r2 bucket create $R2_NAME &>/dev/null || true
           npx wrangler r2 bucket create $BACKUP_R2_NAME &>/dev/null || true
           npx wrangler d1 create $DB_NAME &>/dev/null || true
+
+          # Set backup retention lifecycle rule (remove-then-add for idempotency)
+          BACKUP_RETENTION=${{ vars.SRN_BACKUP_RETENTION_DAYS || 90 }}
+          npx wrangler r2 bucket lifecycle remove $BACKUP_R2_NAME \
+            --id "expire-old-backups" 2>/dev/null || true
+          npx wrangler r2 bucket lifecycle add $BACKUP_R2_NAME \
+            --id "expire-old-backups" \
+            --expire-days $BACKUP_RETENTION \
+            || echo "::warning::Lifecycle rule update failed (check API token R2 permissions) — continuing bootstrap"
           
           D1_ID=$(npx wrangler d1 list 2>/dev/null | grep "$DB_NAME" | grep -oE "[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}" | head -n 1)
           if [ -z "$D1_ID" ]; then exit 1; fi
@@ -233,11 +269,22 @@ jobs:
           sed -i "s/srn-search-limit-placeholder/3/g" wrangler.jsonc
           sed -i "s/srn-default-limit-placeholder/999/g" wrangler.jsonc
           sed -i "s/srn-content-limit-placeholder/6/g" wrangler.jsonc
-          
+          sed -i "s|srn-pubkey-whitelist-placeholder||g" wrangler.jsonc
+          sed -i "s|srn-pow-difficulty-placeholder|0|g" wrangler.jsonc
+          SRN_RANDOM_POW_SECRET=$(openssl rand -hex 16)
+          sed -i "s|srn-pow-secret-placeholder|$SRN_RANDOM_POW_SECRET|g" wrangler.jsonc
+
           npx wrangler d1 migrations apply $DB_NAME --remote
 
-          # Generate relay Ed25519 keypair
-          KEYGEN_OUTPUT=$(cd .. && CGO_ENABLED=0 go run cmd/keygen/main.go)
+          # Generate relay Ed25519 keypair via Node.js
+          KEYGEN_OUTPUT=$(node -e "
+            const { generateKeyPairSync } = require('crypto');
+            const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+            const privHex = privateKey.export({ type: 'pkcs8', format: 'der' }).slice(16).toString('hex');
+            const pubHex = publicKey.export({ type: 'spki', format: 'der' }).slice(12).toString('hex');
+            console.log('Public Key (hex): ' + pubHex);
+            console.log('Private Key (hex): ' + privHex);
+          ")
           NEW_RELAY_PUBKEY=$(echo "$KEYGEN_OUTPUT" | grep "Public Key (hex):" | awk '{print $4}')
           NEW_RELAY_PRIVKEY=$(echo "$KEYGEN_OUTPUT" | grep "Private Key (hex):" | awk '{print $4}')
 

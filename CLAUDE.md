@@ -28,19 +28,6 @@ npx wrangler d1 execute srn_metadata --file=./schema.sql     # Initialize schema
 npx wrangler d1 migrations apply <db-name> --remote          # Apply migrations
 ```
 
-### Go CLI Tools
-
-```bash
-# Generate Ed25519 keypair
-CGO_ENABLED=0 go run cmd/keygen/main.go
-
-# Deploy local SQLite DB to cloud relay
-CGO_ENABLED=0 go run cmd/deploy/main.go -url https://your-worker.dev -db srn.db -limit 0
-
-# Import from Hijarr or old SRN v1 nodes
-CGO_ENABLED=0 go run cmd/migrate/main.go -source https://source.com -type hijarr -privkey <hex> -db srn.db
-```
-
 ## Architecture
 
 The worker (`worker/src/index.ts`) is a Hono + Zod OpenAPI server running on Cloudflare Workers with two storage backends:
@@ -64,14 +51,6 @@ The worker (`worker/src/index.ts`) is a Hono + Zod OpenAPI server running on Clo
 ### Event Protocol
 
 Events are Ed25519-signed JSON objects. The event ID is SHA256 of a canonical JSON structure. Upload uses multipart form (`event` JSON field + `file` binary), with `X-SRN-PubKey` and `X-SRN-Signature` headers. Tags use a nested array format: `[["tmdb", "123"], ["s", "1"], ["ep", "2"]]`.
-
-### Go CLI / Internal Packages
-
-- `internal/event/event.go`: Event struct, SHA256-based ID computation, signing/verification
-- `internal/storage/sqlite.go`: Local SQLite adapter for offline migration workflows
-- `cmd/deploy/`: Reads local SQLite, pushes events to Worker via HTTP multipart
-- `cmd/keygen/`: Generates Ed25519 keypairs (hex output)
-- `cmd/migrate/`: Imports from Hijarr API or SRN v1 nodes, re-signs with provided key
 
 ## Key Design Decisions
 

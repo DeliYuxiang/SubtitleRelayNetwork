@@ -48,10 +48,10 @@ describe("SRN Worker Integration Tests", () => {
     expect(response.status).toBe(200);
     const body = await response.text();
     expect(body).toContain("SRN CLOUDLESS");
-    expect(body).toContain("v-scope"); // Check for Petite-Vue markers
+    expect(body).toContain("vue@3"); // Check for Vue 3 markers
   });
 
-  it("should return 404 for non-existent content", async () => {
+  it("should return 401 for unauthenticated content request", async () => {
     const request = new Request(
       "http://example.com/v1/events/nonexistent/content",
     );
@@ -59,7 +59,8 @@ describe("SRN Worker Integration Tests", () => {
     const response = await worker.fetch(request, env, ctx);
     await waitOnExecutionContext(ctx);
 
-    expect(response.status).toBe(404);
+    // Auth is now required; missing headers yield 401 before content lookup
+    expect(response.status).toBe(401);
   });
 
   it("should expose the OpenAPI documentation UI", async () => {

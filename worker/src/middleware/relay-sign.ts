@@ -1,9 +1,6 @@
 import { createMiddleware } from "hono/factory";
 import type { Bindings } from "../types";
-
-function hexToBytes(hex: string): Uint8Array {
-  return new Uint8Array(hex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
-}
+import { hexToBytes } from "../lib/verify-pubkey";
 
 async function md5Hex(data: ArrayBuffer): Promise<string> {
   const hash = await crypto.subtle.digest("MD5", data);

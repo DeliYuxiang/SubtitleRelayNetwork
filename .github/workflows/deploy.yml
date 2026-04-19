@@ -314,6 +314,8 @@ jobs:
       needs.deploy-or-bootstrap.outputs.skip != 'true'
     uses: ./.github/workflows/run-migrations.yml
     secrets: inherit
+    permissions:
+      contents: write
 
   # -------------------------------------------------------------------------
   # Phase 3: Deploy updated worker (implicitly disables maintenance mode).

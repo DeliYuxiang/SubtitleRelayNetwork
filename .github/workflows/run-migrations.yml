@@ -1,0 +1,94 @@
+name: Run Pending Data Migrations
+
+# Permanent resident workflow.
+# Discovers .github/workflows/migrations/migration*.yml files, executes each
+# script field in Node.js, and archives completed files to .github/workflows/audit/.
+#
+# Triggered automatically by deploy.yml during the maintenance window
+# (after SQL schema migrations, before worker deploy).
+# Can also be triggered manually via workflow_dispatch for out-of-band runs.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      SRN_D1_ID: ${{ secrets.SRN_D1_ID }}
+      SRN_D1_NAME: ${{ secrets.SRN_D1_NAME }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Discover and run migrations
+        run: |
+          shopt -s nullglob
+          MIGRATIONS=(.github/workflows/migrations/migration*.yml)
+
+          if [ ${#MIGRATIONS[@]} -eq 0 ]; then
+            echo "No pending data migrations found."
+            exit 0
+          fi
+
+          echo "::notice::Found ${#MIGRATIONS[@]} pending migration(s)."
+
+          for f in "${MIGRATIONS[@]}"; do
+            MIGRATION_NAME=$(python3 -c "
+import yaml, sys
+try:
+    d = yaml.safe_load(open('$f'))
+    print(d.get('name', '$f'))
+except Exception as e:
+    print('$f')
+" 2>/dev/null)
+            echo "::group::$MIGRATION_NAME"
+            echo "File: $f"
+
+            # Extract the script field and write to a temp file
+            python3 -c "
+import yaml, sys
+d = yaml.safe_load(open('$f'))
+script = d.get('script', '')
+if not script:
+    print('ERROR: migration file has no script field', file=sys.stderr)
+    sys.exit(1)
+sys.stdout.write(script)
+" > /tmp/migration_script.mjs
+
+            node /tmp/migration_script.mjs
+
+            mkdir -p .github/workflows/audit
+            mv "$f" ".github/workflows/audit/$(basename $f)"
+            echo "Archived: $f → .github/workflows/audit/$(basename $f)"
+            echo "::endgroup::"
+          done
+
+      - name: Commit archived migrations
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
+          git add .github/workflows/
+          if git diff --cached --quiet; then
+            echo "Nothing to archive."
+          else
+            git commit -m "audit: archive completed data migrations [skip ci]"
+            git push origin main
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

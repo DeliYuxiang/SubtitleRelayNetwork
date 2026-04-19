@@ -3,7 +3,10 @@
  */
 import { RELAY_VERSION } from "./types";
 
-export const renderLandingPage = (stats: { totalEvents: number }) => `
+export const renderLandingPage = (stats: {
+  totalEvents: number;
+  totalFiles: number;
+}) => `
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -373,6 +376,10 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
             </div>
         </main>
 
+        <div style="display: flex; justify-content: center; margin-top: 6rem;">
+            <iframe src="https://github.com/sponsors/DeliYuxiang/card" title="Sponsor DeliYuxiang" height="225" width="600" style="border: 0;"></iframe>
+        </div>
+
         <footer>
             SRN CLOUDLESS ${RELAY_VERSION} · 去中心化字幕索引网络
         </footer>
@@ -425,7 +432,7 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
         function initApp() {
             return {
                 searchInput: '',
-                tmdbEnabled: true,
+                tmdbEnabled: false,
                 loading: false,
                 results: [],
                 suggestions: [],

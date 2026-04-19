@@ -11,6 +11,21 @@ on:
       - 'worker/**'
       - '.github/workflows/deploy.yml'
 
+# ---------------------------------------------------------------------------
+# Job dependency graph (deploy mode only):
+#
+#   lint-format
+#       │
+#   deploy-or-bootstrap  ← maintenance ON + backup + SQL migrations apply
+#       │
+#   run-data-migrations  ← discovers migrations/*.yml, runs each, archives them
+#       │                  (permanent runner: .github/workflows/run-migrations.yml)
+#       │
+#   finalize-deploy      ← wrangler deploy (maintenance OFF) + registry update
+#
+#   emergency-restore    ← runs on failure of any of the three deploy jobs
+# ---------------------------------------------------------------------------
+
 jobs:
   lint-format:
     runs-on: ubuntu-latest
@@ -36,6 +51,10 @@ jobs:
       - name: Run Tests
         run: cd worker && npm test -- --run
 
+  # -------------------------------------------------------------------------
+  # Phase 1: Enable maintenance mode, backup D1, apply SQL schema migrations.
+  # Also handles the bootstrap path (MODE B) when secrets are absent.
+  # -------------------------------------------------------------------------
   deploy-or-bootstrap:
     needs: [lint-format]
     if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_name == 'main')
@@ -43,6 +62,10 @@ jobs:
     name: Cloudflare Lifecycle
     permissions:
       contents: write
+    outputs:
+      mode: ${{ steps.check_secrets.outputs.mode }}
+      skip: ${{ steps.pre_deploy.outputs.skip }}
+      backup_file: ${{ steps.pre_deploy.outputs.backup_file }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -81,25 +104,16 @@ jobs:
           fi
 
       # --- MODE A: Deploy ---
-      - name: Production Deployment
-        id: prod_deploy
+
+      - name: Configure wrangler.jsonc
         if: steps.check_secrets.outputs.mode == 'deploy'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELAY_PRIVATE_KEY: ${{ secrets.RELAY_PRIVATE_KEY }}
-          RELAY_PUBLIC_KEY: ${{ secrets.RELAY_PUBLIC_KEY }}
-          TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
-          WRANGLER_NON_INTERACTIVE: "true"
         run: |
           cd worker
           sed -i "s/srn-d1-name-placeholder/${{ secrets.SRN_D1_NAME }}/g" wrangler.jsonc
           sed -i "s/srn-d1-id-placeholder/${{ secrets.SRN_D1_ID }}/g" wrangler.jsonc
           sed -i "s/srn-r2-name-placeholder/${{ secrets.SRN_R2_NAME }}/g" wrangler.jsonc
           sed -i "s/srn-backup-r2-name-placeholder/${{ secrets.SRN_BACKUP_R2_NAME }}/g" wrangler.jsonc
-          
-          # Dynamic Rate Limits (from GitHub Variables)
+
           SEARCH_LIMIT=${{ vars.SRN_SEARCH_LIMIT || 3 }}
           DEFAULT_LIMIT=${{ vars.SRN_DEFAULT_LIMIT || 999 }}
           CONTENT_LIMIT=${{ vars.SRN_CONTENT_LIMIT || 6 }}
@@ -107,18 +121,25 @@ jobs:
           sed -i "s/srn-default-limit-placeholder/$DEFAULT_LIMIT/g" wrangler.jsonc
           sed -i "s/srn-content-limit-placeholder/$CONTENT_LIMIT/g" wrangler.jsonc
 
-          # Auth policy vars (GitHub Actions variables)
           sed -i "s|srn-pubkey-whitelist-placeholder|${{ vars.SRN_PUBKEY_WHITELIST }}|g" wrangler.jsonc
           sed -i "s|srn-pow-difficulty-placeholder|${{ vars.SRN_POW_DIFFICULTY || '0' }}|g" wrangler.jsonc
-          
-          # Generate a random PoW secret for this deployment
           SRN_RANDOM_POW_SECRET=$(openssl rand -hex 16)
           sed -i "s|srn-pow-secret-placeholder|$SRN_RANDOM_POW_SECRET|g" wrangler.jsonc
+        env:
+          WRANGLER_NON_INTERACTIVE: "true"
 
-          # 0. SECRETS: Apply sensitive keys to Cloudflare Worker
+      - name: Upload Secrets & Configure Lifecycle Rules
+        if: steps.check_secrets.outputs.mode == 'deploy'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          RELAY_PRIVATE_KEY: ${{ secrets.RELAY_PRIVATE_KEY }}
+          TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
+          WRANGLER_NON_INTERACTIVE: "true"
+        run: |
+          cd worker
           printf '%s' "$RELAY_PRIVATE_KEY" | npx wrangler secret put RELAY_PRIVATE_KEY
 
-          # Ensure backup bucket has a lifecycle rule (remove-then-add for idempotency)
           BACKUP_RETENTION=${{ vars.SRN_BACKUP_RETENTION_DAYS || 90 }}
           npx wrangler r2 bucket lifecycle remove ${{ secrets.SRN_BACKUP_R2_NAME }} \
             --id "expire-old-backups" 2>/dev/null || true
@@ -126,12 +147,22 @@ jobs:
             --id "expire-old-backups" \
             --expire-days $BACKUP_RETENTION \
             || echo "::warning::Lifecycle rule update failed (check API token R2 permissions) — continuing deployment"
+
           if [ -n "$TMDB_TOKEN" ]; then
             printf '%s' "$TMDB_TOKEN" | npx wrangler secret put TMDB_TOKEN
           fi
 
-          # 1. STOP: Query live SHA, then enable Maintenance Mode
-          # The live worker exposes its baked-in COMMIT_SHA via /v1/identity
+      - name: Maintenance Mode ON + Backup + SQL Migrations
+        id: pre_deploy
+        if: steps.check_secrets.outputs.mode == 'deploy'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_NON_INTERACTIVE: "true"
+        run: |
+          cd worker
+
+          # 1. Query live SHA
           WORKERS_SUBDOMAIN=$(curl -sf "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/workers/subdomain" \
             -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" | jq -r '.result.subdomain')
           LIVE_URL="https://srn-worker.${WORKERS_SUBDOMAIN}.workers.dev"
@@ -144,25 +175,25 @@ jobs:
           HEAD_SHA=$(git rev-parse --short HEAD)
           if [ "$SHORT_SHA" = "$HEAD_SHA" ]; then
             echo "::notice::Live worker already at ${HEAD_SHA} — skipping backup and deploy."
+            echo "skip=true" >> $GITHUB_OUTPUT
             exit 0
           fi
+          echo "skip=false" >> $GITHUB_OUTPUT
 
+          # 2. Enable Maintenance Mode
           echo "::notice::Enabling Maintenance Mode before backup..."
           npx wrangler deploy --var MAINTENANCE_MODE:true --var COMMIT_SHA:$SHORT_SHA
 
-          # 2. BACKUP: Backup D1, named after the currently deployed SHA
+          # 3. Backup D1, named after the currently deployed SHA
           BACKUP_FILE="backup-$(date +%Y%m%d-%H%M%S)-$SHORT_SHA.sql"
           echo "::notice::Backing up D1 to R2: $BACKUP_FILE"
           npx wrangler d1 export ${{ secrets.SRN_D1_NAME }} --remote --output "$BACKUP_FILE"
-          
-          # Calculate local MD5
+
           LOCAL_MD5=$(md5sum "$BACKUP_FILE" | awk '{ print $1 }')
           echo "Local MD5: $LOCAL_MD5"
-
-          # Force remote upload
           npx wrangler r2 object put "${{ secrets.SRN_BACKUP_R2_NAME }}/$BACKUP_FILE" --file "$BACKUP_FILE" --remote
+          echo "backup_file=$BACKUP_FILE" >> $GITHUB_OUTPUT
 
-          # 2.1 Verification (Foolproof MD5 Check)
           echo "::notice::Verifying R2 upload integrity..."
           npx wrangler r2 object get "${{ secrets.SRN_BACKUP_R2_NAME }}/$BACKUP_FILE" --file "verify_$BACKUP_FILE" --remote
           REMOTE_MD5=$(md5sum "verify_$BACKUP_FILE" | awk '{ print $1 }')
@@ -174,55 +205,18 @@ jobs:
             echo "::error::MD5 Mismatch! Local: $LOCAL_MD5, Remote: $REMOTE_MD5. Backup might be corrupted."
             exit 1
           fi
+          # Keep local backup file — uploaded as artifact for emergency-restore to use directly.
 
-          rm "$BACKUP_FILE"
-
-          # 3. MIGRATE: Apply database migrations
+          # 4. Apply SQL schema migrations
           npx wrangler d1 migrations apply ${{ secrets.SRN_D1_NAME }} --remote
-          
-          # 4. DEPLOY: Production Deployment (bakes SHA + relay pubkey, implicitly clears MAINTENANCE_MODE)
-          DEPLOY_OUTPUT=$(npx wrangler deploy \
-            --var COMMIT_SHA:$(git rev-parse --short HEAD) \
-            --var RELAY_PUBLIC_KEY:"$RELAY_PUBLIC_KEY")
-          echo "$DEPLOY_OUTPUT"
 
-          DEPLOYED_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE "https://[a-zA-Z0-9.-]+\.workers\.dev" | head -n 1)
-          echo "deployed_url=$DEPLOYED_URL" >> $GITHUB_OUTPUT
-
-          git ls-remote --heads origin "refs/heads/infra/provision-*" | awk '{print $2}' | sed 's|refs/heads/||' | while read branch; do
-            git push origin --delete $branch || true
-          done
-
-      - name: Emergency Restore (Disable Maintenance Mode)
-        if: failure() && steps.check_secrets.outputs.mode == 'deploy'
-        run: |
-          cd worker
-          sed -i "s/srn-d1-name-placeholder/${{ secrets.SRN_D1_NAME }}/g" wrangler.jsonc
-          sed -i "s/srn-d1-id-placeholder/${{ secrets.SRN_D1_ID }}/g" wrangler.jsonc
-          sed -i "s/srn-r2-name-placeholder/${{ secrets.SRN_R2_NAME }}/g" wrangler.jsonc
-          sed -i "s/srn-backup-r2-name-placeholder/${{ secrets.SRN_BACKUP_R2_NAME }}/g" wrangler.jsonc
-          
-          # Dynamic Rate Limits (from GitHub Variables)
-          SEARCH_LIMIT=${{ vars.SRN_SEARCH_LIMIT || 3 }}
-          DEFAULT_LIMIT=${{ vars.SRN_DEFAULT_LIMIT || 999 }}
-          CONTENT_LIMIT=${{ vars.SRN_CONTENT_LIMIT || 6 }}
-          sed -i "s/srn-search-limit-placeholder/$SEARCH_LIMIT/g" wrangler.jsonc
-          sed -i "s/srn-default-limit-placeholder/$DEFAULT_LIMIT/g" wrangler.jsonc
-          sed -i "s/srn-content-limit-placeholder/$CONTENT_LIMIT/g" wrangler.jsonc
-          sed -i "s|srn-pubkey-whitelist-placeholder|${{ vars.SRN_PUBKEY_WHITELIST }}|g" wrangler.jsonc
-          sed -i "s|srn-pow-difficulty-placeholder|${{ vars.SRN_POW_DIFFICULTY || '0' }}|g" wrangler.jsonc
-          
-          # Generate a random PoW secret for emergency restore
-          SRN_RANDOM_POW_SECRET=$(openssl rand -hex 16)
-          sed -i "s|srn-pow-secret-placeholder|$SRN_RANDOM_POW_SECRET|g" wrangler.jsonc
-
-          echo "::warning::Deployment failed. Forcing maintenance mode OFF..."
-          npx wrangler deploy --var MAINTENANCE_MODE:false
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          WRANGLER_NON_INTERACTIVE: "true"
+      - name: Upload Backup Artifact
+        if: steps.pre_deploy.outputs.backup_file != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-backup
+          path: worker/${{ steps.pre_deploy.outputs.backup_file }}
+          retention-days: 1
 
       # --- MODE B: Bootstrap ---
       - name: Setup Go (Bootstrap)
@@ -238,16 +232,15 @@ jobs:
           TS=$(date +%Y%m%d-%H%M%S)
           BRANCH_NAME="infra/provision-$TS"
           git checkout -b $BRANCH_NAME
-          
+
           DB_NAME="srn-db-$TS"
           R2_NAME="srn-assets-$TS"
           BACKUP_R2_NAME="srn-backup-$TS"
-          
+
           npx wrangler r2 bucket create $R2_NAME &>/dev/null || true
           npx wrangler r2 bucket create $BACKUP_R2_NAME &>/dev/null || true
           npx wrangler d1 create $DB_NAME &>/dev/null || true
 
-          # Set backup retention lifecycle rule (remove-then-add for idempotency)
           BACKUP_RETENTION=${{ vars.SRN_BACKUP_RETENTION_DAYS || 90 }}
           npx wrangler r2 bucket lifecycle remove $BACKUP_R2_NAME \
             --id "expire-old-backups" 2>/dev/null || true
@@ -255,17 +248,16 @@ jobs:
             --id "expire-old-backups" \
             --expire-days $BACKUP_RETENTION \
             || echo "::warning::Lifecycle rule update failed (check API token R2 permissions) — continuing bootstrap"
-          
+
           D1_ID=$(npx wrangler d1 list 2>/dev/null | grep "$DB_NAME" | grep -oE "[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}" | head -n 1)
           if [ -z "$D1_ID" ]; then exit 1; fi
-          
+
           echo "::add-mask::$D1_ID"
           sed -i "s/srn-d1-name-placeholder/$DB_NAME/g" wrangler.jsonc
           sed -i "s/srn-d1-id-placeholder/$D1_ID/g" wrangler.jsonc
           sed -i "s/srn-r2-name-placeholder/$R2_NAME/g" wrangler.jsonc
           sed -i "s/srn-backup-r2-name-placeholder/$BACKUP_R2_NAME/g" wrangler.jsonc
-          
-          # Defaults for bootstrap
+
           sed -i "s/srn-search-limit-placeholder/3/g" wrangler.jsonc
           sed -i "s/srn-default-limit-placeholder/999/g" wrangler.jsonc
           sed -i "s/srn-content-limit-placeholder/6/g" wrangler.jsonc
@@ -276,7 +268,6 @@ jobs:
 
           npx wrangler d1 migrations apply $DB_NAME --remote
 
-          # Generate relay Ed25519 keypair via Node.js
           KEYGEN_OUTPUT=$(node -e "
             const { generateKeyPairSync } = require('crypto');
             const { privateKey, publicKey } = generateKeyPairSync('ed25519');
@@ -288,15 +279,12 @@ jobs:
           NEW_RELAY_PUBKEY=$(echo "$KEYGEN_OUTPUT" | grep "Public Key (hex):" | awk '{print $4}')
           NEW_RELAY_PRIVKEY=$(echo "$KEYGEN_OUTPUT" | grep "Private Key (hex):" | awk '{print $4}')
 
-          # Print BOTH keys BEFORE masking — this is the only time they are visible.
-          # ACTION REQUIRED: add both values as GitHub Secrets.
           echo "::notice::=== RELAY KEYPAIR GENERATED ==="
           echo "::notice::RELAY_PUBLIC_KEY  (add as GitHub Secret): $NEW_RELAY_PUBKEY"
           echo "::notice::RELAY_PRIVATE_KEY (add as GitHub Secret): $NEW_RELAY_PRIVKEY"
           echo "::notice::==================================="
           echo "::add-mask::$NEW_RELAY_PRIVKEY"
 
-          # Apply private key to Cloudflare Worker Secrets now so the Worker works after merge
           printf '%s' "$NEW_RELAY_PRIVKEY" | npx wrangler secret put RELAY_PRIVATE_KEY
 
           git config --global user.name "github-actions[bot]"
@@ -313,23 +301,247 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WRANGLER_NON_INTERACTIVE: "true"
 
-      # --- MODE C: Final Sync (Docs) ---
-      - name: Update Registry (README & RELAYS)
-        if: success() && steps.check_secrets.outputs.mode == 'deploy' && github.ref_name == 'main'
+  # -------------------------------------------------------------------------
+  # Phase 2: Run pending data migrations during the maintenance window.
+  # Permanent runner — individual migration files in migrations/ are archived
+  # after execution; this job definition itself never changes.
+  # -------------------------------------------------------------------------
+  run-data-migrations:
+    needs: [deploy-or-bootstrap]
+    if: |
+      needs.deploy-or-bootstrap.result == 'success' &&
+      needs.deploy-or-bootstrap.outputs.mode == 'deploy' &&
+      needs.deploy-or-bootstrap.outputs.skip != 'true'
+    uses: ./.github/workflows/run-migrations.yml
+    secrets: inherit
+
+  # -------------------------------------------------------------------------
+  # Phase 3: Deploy updated worker (implicitly disables maintenance mode).
+  # -------------------------------------------------------------------------
+  finalize-deploy:
+    needs: [deploy-or-bootstrap, run-data-migrations]
+    if: |
+      needs.deploy-or-bootstrap.result == 'success' &&
+      needs.run-data-migrations.result == 'success' &&
+      needs.deploy-or-bootstrap.outputs.mode == 'deploy' &&
+      needs.deploy-or-bootstrap.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    name: Deploy Worker & Update Registry
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
         run: |
-          DEPLOYED_URL="${{ steps.prod_deploy.outputs.deployed_url }}"
+          cd worker
+          rm -rf node_modules package-lock.json
+          npm install
+
+      - name: Configure wrangler.jsonc
+        run: |
+          cd worker
+          sed -i "s/srn-d1-name-placeholder/${{ secrets.SRN_D1_NAME }}/g" wrangler.jsonc
+          sed -i "s/srn-d1-id-placeholder/${{ secrets.SRN_D1_ID }}/g" wrangler.jsonc
+          sed -i "s/srn-r2-name-placeholder/${{ secrets.SRN_R2_NAME }}/g" wrangler.jsonc
+          sed -i "s/srn-backup-r2-name-placeholder/${{ secrets.SRN_BACKUP_R2_NAME }}/g" wrangler.jsonc
+
+          SEARCH_LIMIT=${{ vars.SRN_SEARCH_LIMIT || 3 }}
+          DEFAULT_LIMIT=${{ vars.SRN_DEFAULT_LIMIT || 999 }}
+          CONTENT_LIMIT=${{ vars.SRN_CONTENT_LIMIT || 6 }}
+          sed -i "s/srn-search-limit-placeholder/$SEARCH_LIMIT/g" wrangler.jsonc
+          sed -i "s/srn-default-limit-placeholder/$DEFAULT_LIMIT/g" wrangler.jsonc
+          sed -i "s/srn-content-limit-placeholder/$CONTENT_LIMIT/g" wrangler.jsonc
+
+          sed -i "s|srn-pubkey-whitelist-placeholder|${{ vars.SRN_PUBKEY_WHITELIST }}|g" wrangler.jsonc
+          sed -i "s|srn-pow-difficulty-placeholder|${{ vars.SRN_POW_DIFFICULTY || '0' }}|g" wrangler.jsonc
+          SRN_RANDOM_POW_SECRET=$(openssl rand -hex 16)
+          sed -i "s|srn-pow-secret-placeholder|$SRN_RANDOM_POW_SECRET|g" wrangler.jsonc
+
+      - name: Deploy Worker
+        id: worker_deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          RELAY_PUBLIC_KEY: ${{ secrets.RELAY_PUBLIC_KEY }}
+          WRANGLER_NON_INTERACTIVE: "true"
+        run: |
+          cd worker
+          DEPLOY_OUTPUT=$(npx wrangler deploy \
+            --var COMMIT_SHA:$(git rev-parse --short HEAD) \
+            --var RELAY_PUBLIC_KEY:"$RELAY_PUBLIC_KEY")
+          echo "$DEPLOY_OUTPUT"
+
+          DEPLOYED_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE "https://[a-zA-Z0-9.-]+\.workers\.dev" | head -n 1)
+          echo "deployed_url=$DEPLOYED_URL" >> $GITHUB_OUTPUT
+
+          git ls-remote --heads origin "refs/heads/infra/provision-*" | awk '{print $2}' | sed 's|refs/heads/||' | while read branch; do
+            git push origin --delete $branch || true
+          done
+
+      - name: Update Registry (README & RELAYS)
+        if: github.ref_name == 'main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DEPLOYED_URL="${{ steps.worker_deploy.outputs.deployed_url }}"
           if [ -n "$DEPLOYED_URL" ]; then
             git config --global user.name "github-actions[bot]"
             git config --global user.email "github-actions[bot]@users.noreply.github.com"
             git reset --hard
             git pull --rebase origin main
-            
+
             sed -i "s|\[pending deployment\]|$DEPLOYED_URL|g" README.md
             sed -i "/## 原初中继/,/## 社区中继/s|\[pending deployment\]|$DEPLOYED_URL|g" RELAYS.md
-            
+
             git add README.md RELAYS.md
             git commit -m "docs: sync live relay registry [skip ci]" || echo "No changes"
             git push origin main
           fi
+
+  # -------------------------------------------------------------------------
+  # Emergency restore: fires if ANY of the three deploy phases fail.
+  #
+  # Two-tier response based on which phase failed:
+  #
+  #   deploy-or-bootstrap OR run-data-migrations failed
+  #     → Database may have been modified (schema migration, data backfill).
+  #     → Restore D1 from the pre-deployment backup stored in R2.
+  #     → Redeploy the previously-live code version (SHA embedded in backup name).
+  #
+  #   finalize-deploy failed only
+  #     → Database is clean (no changes in this phase).
+  #     → Disable maintenance mode; last-known-good worker becomes live again.
+  # -------------------------------------------------------------------------
+  emergency-restore:
+    needs: [deploy-or-bootstrap, run-data-migrations, finalize-deploy]
+    if: |
+      failure() &&
+      needs.deploy-or-bootstrap.outputs.mode == 'deploy' &&
+      needs.deploy-or-bootstrap.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    name: Emergency Restore
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: |
+          cd worker
+          rm -rf node_modules package-lock.json
+          npm install
+
+      - name: Configure wrangler.jsonc
+        id: configure
+        run: |
+          cd worker
+          sed -i "s/srn-d1-name-placeholder/${{ secrets.SRN_D1_NAME }}/g" wrangler.jsonc
+          sed -i "s/srn-d1-id-placeholder/${{ secrets.SRN_D1_ID }}/g" wrangler.jsonc
+          sed -i "s/srn-r2-name-placeholder/${{ secrets.SRN_R2_NAME }}/g" wrangler.jsonc
+          sed -i "s/srn-backup-r2-name-placeholder/${{ secrets.SRN_BACKUP_R2_NAME }}/g" wrangler.jsonc
+
+          SEARCH_LIMIT=${{ vars.SRN_SEARCH_LIMIT || 3 }}
+          DEFAULT_LIMIT=${{ vars.SRN_DEFAULT_LIMIT || 999 }}
+          CONTENT_LIMIT=${{ vars.SRN_CONTENT_LIMIT || 6 }}
+          sed -i "s/srn-search-limit-placeholder/$SEARCH_LIMIT/g" wrangler.jsonc
+          sed -i "s/srn-default-limit-placeholder/$DEFAULT_LIMIT/g" wrangler.jsonc
+          sed -i "s/srn-content-limit-placeholder/$CONTENT_LIMIT/g" wrangler.jsonc
+
+          sed -i "s|srn-pubkey-whitelist-placeholder|${{ vars.SRN_PUBKEY_WHITELIST }}|g" wrangler.jsonc
+          sed -i "s|srn-pow-difficulty-placeholder|${{ vars.SRN_POW_DIFFICULTY || '0' }}|g" wrangler.jsonc
+          SRN_RANDOM_POW_SECRET=$(openssl rand -hex 16)
+          sed -i "s|srn-pow-secret-placeholder|$SRN_RANDOM_POW_SECRET|g" wrangler.jsonc
+
+          # Determine whether DB was touched (schema or data migration ran)
+          DOB_FAILED="${{ needs.deploy-or-bootstrap.result == 'failure' }}"
+          DM_FAILED="${{ needs.run-data-migrations.result == 'failure' }}"
+          if [ "$DOB_FAILED" = "true" ] || [ "$DM_FAILED" = "true" ]; then
+            echo "db_touched=true" >> $GITHUB_OUTPUT
+          else
+            echo "db_touched=false" >> $GITHUB_OUTPUT
+          fi
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WRANGLER_NON_INTERACTIVE: "true"
+
+      # --- Path A: DB was touched → restore from backup + rollback code ---
+      - name: Download Backup Artifact
+        id: artifact_download
+        if: steps.configure.outputs.db_touched == 'true' && needs.deploy-or-bootstrap.outputs.backup_file != ''
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: d1-backup
+          path: worker/
+
+      - name: Restore Database from Pre-Deployment Backup
+        if: steps.configure.outputs.db_touched == 'true' && needs.deploy-or-bootstrap.outputs.backup_file != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_NON_INTERACTIVE: "true"
+        run: |
+          BACKUP_FILE="${{ needs.deploy-or-bootstrap.outputs.backup_file }}"
+          cd worker
+
+          if [ "${{ steps.artifact_download.outcome }}" = "success" ] && [ -f "$BACKUP_FILE" ]; then
+            echo "::notice::Using local artifact for restore: $BACKUP_FILE"
+          else
+            echo "::warning::Artifact unavailable — fetching backup from R2: $BACKUP_FILE"
+            npx wrangler r2 object get "${{ secrets.SRN_BACKUP_R2_NAME }}/$BACKUP_FILE" \
+              --file "$BACKUP_FILE" --remote
+          fi
+
+          echo "::warning::Restoring D1 from backup: $BACKUP_FILE"
+          npx wrangler d1 execute ${{ secrets.SRN_D1_NAME }} \
+            --remote --file="$BACKUP_FILE" --yes
+          echo "::notice::D1 database restored from $BACKUP_FILE"
+
+      - name: Redeploy Previous Code Version
+        if: steps.configure.outputs.db_touched == 'true' && needs.deploy-or-bootstrap.outputs.backup_file != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_NON_INTERACTIVE: "true"
+        run: |
+          BACKUP_FILE="${{ needs.deploy-or-bootstrap.outputs.backup_file }}"
+          # Backup name format: backup-YYYYMMDD-HHMMSS-<short_sha>.sql
+          PREV_SHA=$(echo "$BACKUP_FILE" | grep -oE "[a-f0-9]{7}" | tail -n 1)
+          if [ -z "$PREV_SHA" ]; then
+            echo "::error::Could not extract SHA from backup filename '$BACKUP_FILE'. Falling back to maintenance-off deploy."
+            cd worker && npx wrangler deploy --var MAINTENANCE_MODE:false
+            exit 0
+          fi
+
+          echo "::warning::Redeploying previous code version: $PREV_SHA"
+          git checkout "$PREV_SHA"
+          cd worker
+          npm install
+          npx wrangler deploy --var MAINTENANCE_MODE:false
+          echo "::notice::Emergency rollback complete — live at $PREV_SHA, DB restored from $BACKUP_FILE"
+
+      # --- Path B: Only finalize-deploy failed → DB is clean, just turn maintenance off ---
+      - name: Disable Maintenance Mode (no DB changes)
+        if: steps.configure.outputs.db_touched == 'false'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_NON_INTERACTIVE: "true"
+        run: |
+          cd worker
+          echo "::warning::Deployment failed after DB migration. Forcing maintenance mode OFF..."
+          npx wrangler deploy --var MAINTENANCE_MODE:false

@@ -31,7 +31,7 @@ jobs:
         run: cd worker && npm test -- --run
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # Resolve preview resource IDs from Terraform state.
+  # Resolve preview + production resource IDs from Terraform state (in parallel).
   # Skips preview deploy automatically if preview resources don't exist yet.
   # ─────────────────────────────────────────────────────────────────────────────
   resolve-infra:
@@ -41,13 +41,20 @@ jobs:
     with:
       environment: preview
 
+  resolve-prod-infra:
+    needs: check
+    uses: ./.github/workflows/resolve-infra.yml
+    secrets: inherit
+    with:
+      environment: production
+
   # ─────────────────────────────────────────────────────────────────────────────
   # Deploy to the shared preview environment (srn-worker-preview).
-  # Isolated D1 + R2 — no maintenance mode, no backup, no data migrations.
+  # Seeds preview D1 from production snapshot so tests run against real data.
   # Skipped automatically if preview resources are not yet provisioned.
   # ─────────────────────────────────────────────────────────────────────────────
   preview-deploy:
-    needs: [check, resolve-infra]
+    needs: [check, resolve-infra, resolve-prod-infra]
     runs-on: ubuntu-latest
     name: Deploy to Preview
     if: needs.resolve-infra.outputs.infra_exists == 'true'
@@ -58,6 +65,10 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       WRANGLER_NON_INTERACTIVE: "true"
+      PREVIEW_D1_NAME: ${{ needs.resolve-infra.outputs.d1_name }}
+      PREVIEW_D1_ID:   ${{ needs.resolve-infra.outputs.d1_id }}
+      PROD_D1_NAME:    ${{ needs.resolve-prod-infra.outputs.d1_name }}
+      PROD_D1_ID:      ${{ needs.resolve-prod-infra.outputs.d1_id }}
 
     steps:
       - name: Checkout
@@ -71,6 +82,37 @@ jobs:
       - name: Install dependencies
         run: cd worker && npm ci
 
+      - name: Seed preview D1 from production
+        if: needs.resolve-prod-infra.outputs.infra_exists == 'true'
+        run: |
+          cd worker
+
+          # Export production D1 to a SQL dump
+          echo "Exporting production D1 ($PROD_D1_NAME)..."
+          npx wrangler d1 export "$PROD_D1_NAME" --remote --output /tmp/prod-dump.sql
+
+          # Clear preview D1: query sqlite_master, drop all user tables
+          echo "Clearing preview D1 ($PREVIEW_D1_NAME)..."
+          D1_API="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database/$PREVIEW_D1_ID"
+          QUERY_OUT=$(curl -s "$D1_API/query" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"sql":"SELECT name FROM sqlite_master WHERE type=\u0027table\u0027 AND name NOT LIKE \u0027sqlite_%\u0027","params":[]}')
+          TABLES=$(echo "$QUERY_OUT" | jq -r '.result[0].results[].name | select(startswith("_cf_") | not)')
+          if [ -n "$TABLES" ]; then
+            {
+              echo "PRAGMA foreign_keys=OFF;"
+              for t in $TABLES; do echo "DROP TABLE IF EXISTS \"$t\";"; done
+              echo "PRAGMA foreign_keys=ON;"
+            } > /tmp/reset_preview.sql
+            npx wrangler d1 execute "$PREVIEW_D1_NAME" --remote --file=/tmp/reset_preview.sql --yes
+          fi
+
+          # Import production dump into preview D1
+          echo "Importing production dump into preview D1..."
+          npx wrangler d1 execute "$PREVIEW_D1_NAME" --remote --file=/tmp/prod-dump.sql --yes
+          echo "Preview D1 seeded from production."
+
       - name: Generate wrangler preview config
         run: |
           SRN_POW_SECRET=$(openssl rand -hex 16) \
@@ -83,7 +125,7 @@ jobs:
       - name: Apply preview schema migrations
         run: |
           cd worker
-          npx wrangler d1 migrations apply "${{ needs.resolve-infra.outputs.d1_name }}" \
+          npx wrangler d1 migrations apply "$PREVIEW_D1_NAME" \
             --remote --config wrangler.preview.jsonc
 
       - name: Deploy to preview

@@ -26,7 +26,7 @@ script: |
 
   const BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/d1/database/${DB_ID}`;
   const BATCH_SIZE  = 500; // rows fetched per SELECT
-  const WRITE_BATCH = 100; // max statements per /batch API call (D1 limit)
+  const WRITE_BATCH = 100; // rows per CASE UPDATE (3 params/row → 300 params, under SQLite's 999 limit)
 
   async function d1(sql, params = []) {
     const res = await fetch(`${BASE}/query`, {
@@ -39,16 +39,33 @@ script: |
     return data.result[0];
   }
 
-  // Send multiple SQL statements in one HTTP round-trip
-  async function d1batch(queries) {
-    const res = await fetch(`${BASE}/batch`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${API_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ queries }),
-    });
-    const data = await res.json();
-    if (!data.success) throw new Error(`D1 batch error: ${JSON.stringify(data.errors)}`);
-    return data.result; // array of { results, meta } — one per query
+  // D1 REST API has no /batch endpoint — use a CASE expression to update N rows in one call.
+  // Returns { updated, removed } counts for this sub-batch.
+  async function processBatch(rows) {
+    const inList = rows.map(() => '?').join(',');
+
+    // 1. Bulk UPDATE OR IGNORE via CASE — one round-trip for all rows
+    const caseWhen = rows.map(() => 'WHEN ? THEN ?').join(' ');
+    await d1(
+      `UPDATE OR IGNORE event_metadata SET dedup_hash = CASE event_id ${caseWhen} END WHERE event_id IN (${inList}) AND dedup_hash IS NULL`,
+      [...rows.flatMap(r => [r.event_id, r.hash]), ...rows.map(r => r.event_id)],
+    );
+
+    // 2. Find rows that are still NULL — OR IGNORE left them untouched because of a UNIQUE conflict
+    const { results: stillNull } = await d1(
+      `SELECT event_id FROM event_metadata WHERE event_id IN (${inList}) AND dedup_hash IS NULL`,
+      rows.map(r => r.event_id),
+    );
+    const duplicateIds = (stillNull ?? []).map(r => r.event_id);
+
+    // 3. Delete the confirmed duplicates
+    if (duplicateIds.length > 0) {
+      const delList = duplicateIds.map(() => '?').join(',');
+      await d1(`DELETE FROM event_metadata WHERE event_id IN (${delList})`, duplicateIds);
+      duplicateIds.forEach(id => console.log(`Discarded duplicate event: ${id}`));
+    }
+
+    return { updated: rows.length - duplicateIds.length, removed: duplicateIds.length };
   }
 
   function chunk(arr, size) {
@@ -93,34 +110,13 @@ script: |
                             row.season_num, row.episode_num, row.language, row.archive_md5),
       }));
 
-      // Batch all UPDATEs — one HTTP call per 100 rows instead of one per row
-      const updateQueries = rows.map(({ event_id, hash }) => ({
-        sql: 'UPDATE OR IGNORE event_metadata SET dedup_hash = ? WHERE event_id = ? AND dedup_hash IS NULL',
-        params: [hash, event_id],
-      }));
-      const updateResults = [];
-      for (const batch of chunk(updateQueries, WRITE_BATCH)) {
-        updateResults.push(...await d1batch(batch));
+      // Process in sub-batches of WRITE_BATCH: each sub-batch = 3 REST API calls
+      // (1 CASE UPDATE + 1 SELECT for NULLs + 1 DELETE for duplicates)
+      for (const batch of chunk(rows, WRITE_BATCH)) {
+        const { updated: u, removed: r } = await processBatch(batch);
+        updated += u;
+        removed += r;
       }
-
-      // Collect duplicates (UPDATE returned 0 changes = UNIQUE conflict)
-      const duplicateIds = rows
-        .filter((_, i) => updateResults[i].meta.changes === 0)
-        .map(r => r.event_id);
-
-      if (duplicateIds.length > 0) {
-        const deleteQueries = duplicateIds.map(id => ({
-          sql: 'DELETE FROM event_metadata WHERE event_id = ? AND dedup_hash IS NULL',
-          params: [id],
-        }));
-        for (const batch of chunk(deleteQueries, WRITE_BATCH)) {
-          await d1batch(batch);
-        }
-        duplicateIds.forEach(id => console.log(`Discarded duplicate event: ${id}`));
-      }
-
-      updated += rows.length - duplicateIds.length;
-      removed += duplicateIds.length;
       console.log(`Progress: updated=${updated}, removed=${removed}`);
     }
 

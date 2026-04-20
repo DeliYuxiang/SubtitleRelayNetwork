@@ -164,7 +164,7 @@ jobs:
           cd worker
 
           # 1. Read previously deployed SHA and URL from R2 (written by Deploy Worker step)
-          wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt 2>/dev/null || true
+          npx wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt 2>/dev/null || true
           SHORT_SHA=$(cat /tmp/deployed_sha.txt 2>/dev/null | tr -d '[:space:]')
           if [ -z "$SHORT_SHA" ]; then
             SHORT_SHA="initial"
@@ -172,7 +172,7 @@ jobs:
           echo "::notice::Currently deployed SHA: $SHORT_SHA"
 
           # 1b. Check if server is already in maintenance mode.
-          wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt 2>/dev/null || true
+          npx wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt 2>/dev/null || true
           LIVE_URL=$(cat /tmp/deployed_url.txt 2>/dev/null | tr -d '[:space:]')
           if [ -n "$LIVE_URL" ]; then
             HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$LIVE_URL/v1/health" 2>/dev/null || echo "000")
@@ -405,36 +405,20 @@ jobs:
           echo "$DEPLOY_OUTPUT"
 
           echo -n "$SHORT_SHA" > /tmp/deployed_sha.txt
-          wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt
+          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt
 
           DEPLOYED_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE "https://[a-zA-Z0-9.-]+\.workers\.dev" | head -n 1)
           echo -n "$DEPLOYED_URL" > /tmp/deployed_url.txt
-          wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt
+          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt
           echo "deployed_url=$DEPLOYED_URL" >> $GITHUB_OUTPUT
 
-          git ls-remote --heads origin "refs/heads/infra/provision-*" | awk '{print $2}' | sed 's|refs/heads/||' | while read branch; do
-            git push origin --delete $branch || true
-          done
-
-      - name: Update Registry (README & RELAYS)
-        if: github.ref_name == 'main'
+      - name: Cleanup provision branches
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          DEPLOYED_URL="${{ steps.worker_deploy.outputs.deployed_url }}"
-          if [ -n "$DEPLOYED_URL" ]; then
-            git config --global user.name "github-actions[bot]"
-            git config --global user.email "github-actions[bot]@users.noreply.github.com"
-            git reset --hard
-            git pull --rebase origin main
-
-            sed -i "s|\[pending deployment\]|$DEPLOYED_URL|g" README.md
-            sed -i "/## 原初中继/,/## 社区中继/s|\[pending deployment\]|$DEPLOYED_URL|g" RELAYS.md
-
-            git add README.md RELAYS.md
-            git commit -m "docs: sync live relay registry [skip ci]" || echo "No changes"
-            git push origin main
-          fi
+          git ls-remote --heads origin "refs/heads/infra/provision-*" | awk '{print $2}' | sed 's|refs/heads/||' | while read branch; do
+            git push origin --delete "$branch" || true
+          done
 
   # -------------------------------------------------------------------------
   # Emergency restore: fires if ANY of the three deploy phases fail.
@@ -540,7 +524,7 @@ jobs:
           npm ci
           npx wrangler deploy --config wrangler.production.jsonc --var MAINTENANCE_MODE:false
           echo -n "$PREV_SHA" > /tmp/deployed_sha.txt
-          wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt
+          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt
           echo "::notice::Emergency rollback complete — live at $PREV_SHA, DB restored from $BACKUP_FILE"
 
       # --- Path B: Only finalize-deploy failed → DB is clean, just turn maintenance off ---

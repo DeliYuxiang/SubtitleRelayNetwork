@@ -1,0 +1,36 @@
+name: Run Pending Data Migrations
+
+# Permanent resident workflow.
+# Executes worker/data-migrations/*.mjs files that haven't run yet,
+# tracked via the _srn_migrations table in D1. Idempotent — safe to run
+# multiple times; already-completed migrations are skipped automatically.
+#
+# Triggered automatically by deploy.yml during the maintenance window
+# (after SQL schema migrations, before worker deploy).
+# Can also be triggered manually via workflow_dispatch for out-of-band runs.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    name: Run Data Migrations
+    # No contents:write needed — no more git commits from this workflow
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run pending data migrations
+        run: node worker/data-migrations/run.mjs
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          SRN_D1_ID: ${{ secrets.SRN_D1_ID }}

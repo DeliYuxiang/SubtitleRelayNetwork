@@ -376,9 +376,6 @@ export const renderLandingPage = (stats: {
             </div>
         </main>
 
-        <div style="display: flex; justify-content: center; margin-top: 6rem;">
-            <iframe src="https://github.com/sponsors/DeliYuxiang/card" title="Sponsor DeliYuxiang" height="225" width="600" style="border: 0;"></iframe>
-        </div>
 
         <footer>
             SRN CLOUDLESS ${RELAY_VERSION} · 去中心化字幕索引网络

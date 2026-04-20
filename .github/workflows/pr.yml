@@ -128,6 +128,11 @@ jobs:
           npx wrangler d1 migrations apply "$PREVIEW_D1_NAME" \
             --remote --config wrangler.preview.jsonc
 
+      - name: Run pending data migrations
+        run: node worker/data-migrations/run.mjs
+        env:
+          SRN_D1_ID: ${{ needs.resolve-infra.outputs.d1_id }}
+
       - name: Deploy to preview
         id: deploy
         run: |

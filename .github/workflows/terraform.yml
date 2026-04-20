@@ -20,10 +20,7 @@ jobs:
   terraform:
     runs-on: ubuntu-latest
     name: Terraform Plan / Apply
-    # Skip until R2 backend is provisioned.
-    # To enable: set repository Variable TERRAFORM_ENABLED = true
-    # (GitHub → Settings → Secrets and variables → Variables)
-    if: ${{ vars.TERRAFORM_ENABLED == 'true' }}
+
     permissions:
       contents: read
       pull-requests: write    # for posting plan as PR comment

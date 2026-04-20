@@ -1,0 +1,112 @@
+name: PR Checks & Preview Deploy
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'worker/**'
+      - '.github/workflows/pr.yml'
+      - '.github/workflows/deploy.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    name: Code Check & Test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: cd worker && npm ci
+
+      - name: Format Check
+        run: cd worker && npm run format:check
+
+      - name: Run Tests
+        run: cd worker && npm test -- --run
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Resolve preview resource IDs from Terraform state.
+  # Skips preview deploy automatically if preview resources don't exist yet.
+  # ─────────────────────────────────────────────────────────────────────────────
+  resolve-infra:
+    needs: check
+    uses: ./.github/workflows/resolve-infra.yml
+    secrets: inherit
+    with:
+      environment: preview
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Deploy to the shared preview environment (srn-worker-preview).
+  # Isolated D1 + R2 — no maintenance mode, no backup, no data migrations.
+  # Skipped automatically if preview resources are not yet provisioned.
+  # ─────────────────────────────────────────────────────────────────────────────
+  preview-deploy:
+    needs: [check, resolve-infra]
+    runs-on: ubuntu-latest
+    name: Deploy to Preview
+    if: needs.resolve-infra.outputs.infra_exists == 'true'
+    permissions:
+      pull-requests: write
+      contents: read
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WRANGLER_NON_INTERACTIVE: "true"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: cd worker && npm ci
+
+      - name: Generate wrangler preview config
+        run: |
+          SRN_POW_SECRET=$(openssl rand -hex 16) \
+            .github/workflows/scripts/generate_wrangler_config.sh worker/wrangler.preview.jsonc --preview
+        env:
+          SRN_PREVIEW_D1_NAME: ${{ needs.resolve-infra.outputs.d1_name }}
+          SRN_PREVIEW_D1_ID: ${{ needs.resolve-infra.outputs.d1_id }}
+          SRN_PREVIEW_R2_NAME: ${{ needs.resolve-infra.outputs.r2_name }}
+
+      - name: Apply preview schema migrations
+        run: |
+          cd worker
+          npx wrangler d1 migrations apply "${{ needs.resolve-infra.outputs.d1_name }}" \
+            --remote --config wrangler.preview.jsonc
+
+      - name: Deploy to preview
+        id: deploy
+        run: |
+          cd worker
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          RELAY_PUBLIC_KEY="${{ secrets.RELAY_PUBLIC_KEY }}"
+          DEPLOY_OUTPUT=$(npx wrangler deploy --config wrangler.preview.jsonc \
+            --var COMMIT_SHA:"$SHORT_SHA" \
+            --var RELAY_PUBLIC_KEY:"${RELAY_PUBLIC_KEY:-preview-key}" \
+            --var SRN_POW_SECRET:"$(openssl rand -hex 16)")
+          echo "$DEPLOY_OUTPUT"
+
+          PREVIEW_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE "https://[a-zA-Z0-9.-]+\.workers\.dev" | head -n 1)
+          echo "preview_url=${PREVIEW_URL}" >> $GITHUB_OUTPUT
+
+      - name: Post preview URL to PR
+        if: steps.deploy.outputs.preview_url != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "Preview deployed: ${{ steps.deploy.outputs.preview_url }}
+
+Worker: \`srn-worker-preview\` | Commit: \`$(git rev-parse --short HEAD)\`"

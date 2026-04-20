@@ -1,0 +1,14 @@
+# Copy to terraform.tfvars (never commit terraform.tfvars — it is gitignored).
+# Alternatively, pass values via TF_VAR_* environment variables.
+
+cloudflare_account_id     = "your_account_id_here"
+cloudflare_api_token      = "your_api_token_here"
+
+production_d1_name        = "srn-db-prod"
+production_r2_name        = "srn-assets-prod"
+production_backup_r2_name = "srn-backup-prod"
+
+preview_d1_name           = "srn-db-preview"
+preview_r2_name           = "srn-assets-preview"
+
+backup_retention_days     = 90

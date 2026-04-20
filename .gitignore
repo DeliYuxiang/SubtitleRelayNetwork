@@ -24,6 +24,8 @@
 /worker/.dev.vars
 /worker/.env
 /worker/.env.test
+/worker/wrangler.production.jsonc
+/worker/wrangler.preview.jsonc
 
 # IDE / OS
 .vscode/
@@ -42,3 +44,5 @@ go.sum
 go.mod
 *.o
 **/*.nfs*
+/bbs.md
+/.wrangler

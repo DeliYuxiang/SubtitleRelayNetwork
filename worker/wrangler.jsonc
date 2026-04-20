@@ -6,22 +6,24 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  // Local dev defaults — CI uses a generated wrangler.production.jsonc (gitignored).
+  // After Terraform provisioning, real IDs are committed under env.production / env.preview.
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "srn-d1-name-placeholder",
-      "database_id": "srn-d1-id-placeholder",
+      "database_name": "srn-db-local",
+      "database_id": "00000000-0000-0000-0000-000000000001",
       "migrations_dir": "migrations"
     }
   ],
   "r2_buckets": [
     {
       "binding": "BUCKET",
-      "bucket_name": "srn-r2-name-placeholder"
+      "bucket_name": "srn-assets-local"
     },
     {
       "binding": "BACKUP_BUCKET",
-      "bucket_name": "srn-backup-r2-name-placeholder"
+      "bucket_name": "srn-backup-local"
     }
   ],
   "observability": {
@@ -29,11 +31,11 @@
   },
   "vars": {
     // Comma-separated hex Ed25519 pubkeys for VIP bypass (no PoW required).
-    "SRN_PUBKEY_WHITELIST": "srn-pubkey-whitelist-placeholder",
+    "SRN_PUBKEY_WHITELIST": "",
     // Base difficulty: number of leading zero hex chars required in SHA-256 hash.
-    "SRN_POW_DIFFICULTY": "srn-pow-difficulty-placeholder",
+    "SRN_POW_DIFFICULTY": "0",
     // Secret salt for PoW computation.
-    "SRN_POW_SECRET": "srn-pow-secret-placeholder"
+    "SRN_POW_SECRET": "dev-secret-replace-in-production"
   },
   "unsafe": {
     "bindings": [
@@ -41,20 +43,88 @@
         "name": "SEARCH_LIMITER",
         "type": "ratelimit",
         "namespace_id": "1001",
-        "simple": { "limit": srn-search-limit-placeholder, "period": 60 }
+        "simple": { "limit": 3, "period": 60 }
       },
       {
         "name": "DEFAULT_LIMITER",
         "type": "ratelimit",
         "namespace_id": "1002",
-        "simple": { "limit": srn-default-limit-placeholder, "period": 60 }
+        "simple": { "limit": 999, "period": 60 }
       },
       {
         "name": "CONTENT_LIMITER",
         "type": "ratelimit",
         "namespace_id": "1003",
-        "simple": { "limit": srn-content-limit-placeholder, "period": 60 }
+        "simple": { "limit": 6, "period": 60 }
       }
     ]
+  },
+  // Named environments — filled in with real IDs after Terraform provisioning.
+  // PR deploys target env.preview; main-branch deploys target env.production.
+  // CI still generates wrangler.production.jsonc / wrangler.preview.jsonc until
+  // real IDs are committed here (Phase 3).
+  "env": {
+    "preview": {
+      // Deployed as srn-worker-preview — completely isolated from production.
+      // Provision: npx wrangler d1 create srn-db-preview
+      //            npx wrangler r2 bucket create srn-assets-preview
+      // Then add GitHub Secrets: SRN_PREVIEW_D1_NAME, SRN_PREVIEW_D1_ID, SRN_PREVIEW_R2_NAME
+      "name": "srn-worker-preview",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "srn-db-preview",
+          "database_id": "00000000-0000-0000-0000-000000000002",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        { "binding": "BUCKET",        "bucket_name": "srn-assets-preview" },
+        { "binding": "BACKUP_BUCKET", "bucket_name": "srn-assets-preview" }
+      ],
+      "vars": {
+        "SRN_PUBKEY_WHITELIST": "",
+        "SRN_POW_DIFFICULTY": "0",
+        "SRN_POW_SECRET": "preview-secret"
+      },
+      // namespace_ids 2001-2003 isolate preview rate-limit counters from production (1001-1003)
+      "unsafe": {
+        "bindings": [
+          { "name": "SEARCH_LIMITER",  "type": "ratelimit", "namespace_id": "2001", "simple": { "limit": 999, "period": 60 } },
+          { "name": "DEFAULT_LIMITER", "type": "ratelimit", "namespace_id": "2002", "simple": { "limit": 999, "period": 60 } },
+          { "name": "CONTENT_LIMITER", "type": "ratelimit", "namespace_id": "2003", "simple": { "limit": 999, "period": 60 } }
+        ]
+      }
+    },
+    "production": {
+      // Real IDs committed here after Terraform provisioning (Phase 3).
+      // Until then CI generates wrangler.production.jsonc from GitHub Secrets.
+      "name": "srn-worker",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "srn-db-prod",
+          "database_id": "00000000-0000-0000-0000-000000000003",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        { "binding": "BUCKET",        "bucket_name": "srn-assets-prod" },
+        { "binding": "BACKUP_BUCKET", "bucket_name": "srn-backup-prod" }
+      ],
+      "vars": {
+        "SRN_PUBKEY_WHITELIST": "",
+        "SRN_POW_DIFFICULTY": "0",
+        // Overridden via --var SRN_POW_SECRET at deploy time
+        "SRN_POW_SECRET": "replace-via---var-at-deploy-time"
+      },
+      "unsafe": {
+        "bindings": [
+          { "name": "SEARCH_LIMITER",  "type": "ratelimit", "namespace_id": "1001", "simple": { "limit": 3,   "period": 60 } },
+          { "name": "DEFAULT_LIMITER", "type": "ratelimit", "namespace_id": "1002", "simple": { "limit": 999, "period": 60 } },
+          { "name": "CONTENT_LIMITER", "type": "ratelimit", "namespace_id": "1003", "simple": { "limit": 6,   "period": 60 } }
+        ]
+      }
+    }
   }
 }

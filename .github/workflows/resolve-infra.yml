@@ -1,0 +1,95 @@
+name: Resolve Infra Outputs
+
+# Reusable workflow: reads Terraform state and surfaces resource IDs as outputs.
+# Called by deploy.yml, pr.yml, rollback.yml, and run-migrations.yml so that
+# none of those workflows need to store resource IDs as GitHub Secrets.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'production or preview'
+        type: string
+        required: false
+        default: 'production'
+    outputs:
+      d1_id:
+        description: 'D1 database ID'
+        value: ${{ jobs.resolve.outputs.d1_id }}
+      d1_name:
+        description: 'D1 database name'
+        value: ${{ jobs.resolve.outputs.d1_name }}
+      r2_name:
+        description: 'R2 assets bucket name'
+        value: ${{ jobs.resolve.outputs.r2_name }}
+      backup_r2_name:
+        description: 'R2 backup bucket name (production only; empty for preview)'
+        value: ${{ jobs.resolve.outputs.backup_r2_name }}
+      infra_exists:
+        description: '"true" if Terraform state contains the requested resources'
+        value: ${{ jobs.resolve.outputs.infra_exists }}
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    name: Read Terraform State
+    defaults:
+      run:
+        working-directory: infra/terraform
+    outputs:
+      d1_id:          ${{ steps.out.outputs.d1_id }}
+      d1_name:        ${{ steps.out.outputs.d1_name }}
+      r2_name:        ${{ steps.out.outputs.r2_name }}
+      backup_r2_name: ${{ steps.out.outputs.backup_r2_name }}
+      infra_exists:   ${{ steps.out.outputs.infra_exists }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.5"
+          terraform_wrapper: false   # must be false — wrapper corrupts JSON output
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="endpoint=https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com" \
+            -backend-config="access_key=${{ secrets.TF_R2_ACCESS_KEY_ID }}" \
+            -backend-config="secret_key=${{ secrets.TF_R2_SECRET_ACCESS_KEY }}"
+        env:
+          TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: Parse outputs
+        id: out
+        run: |
+          RAW=$(terraform output -json 2>/dev/null || echo '{}')
+
+          if [ "$RAW" = "{}" ] || [ -z "$(echo "$RAW" | jq -r 'keys[]' 2>/dev/null)" ]; then
+            echo "infra_exists=false" >> $GITHUB_OUTPUT
+            echo "d1_id="            >> $GITHUB_OUTPUT
+            echo "d1_name="          >> $GITHUB_OUTPUT
+            echo "r2_name="          >> $GITHUB_OUTPUT
+            echo "backup_r2_name="   >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "infra_exists=true" >> $GITHUB_OUTPUT
+
+          if [ "${{ inputs.environment }}" = "preview" ]; then
+            echo "d1_id=$(echo "$RAW"          | jq -r '.preview_d1_id.value // ""')"    >> $GITHUB_OUTPUT
+            echo "d1_name=$(echo "$RAW"         | jq -r '.preview_d1_name.value // ""')"  >> $GITHUB_OUTPUT
+            echo "r2_name=$(echo "$RAW"         | jq -r '.preview_r2_name.value // ""')"  >> $GITHUB_OUTPUT
+            echo "backup_r2_name="                                                         >> $GITHUB_OUTPUT
+          else
+            echo "d1_id=$(echo "$RAW"          | jq -r '.production_d1_id.value // ""')"           >> $GITHUB_OUTPUT
+            echo "d1_name=$(echo "$RAW"         | jq -r '.production_d1_name.value // ""')"         >> $GITHUB_OUTPUT
+            echo "r2_name=$(echo "$RAW"         | jq -r '.production_r2_name.value // ""')"         >> $GITHUB_OUTPUT
+            echo "backup_r2_name=$(echo "$RAW"  | jq -r '.production_backup_r2_name.value // ""')"  >> $GITHUB_OUTPUT
+          fi
+        env:
+          TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}

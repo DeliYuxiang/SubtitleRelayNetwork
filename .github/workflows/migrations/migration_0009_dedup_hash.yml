@@ -13,6 +13,8 @@ name: "Backfill dedup_hash for existing Kind 1001 events"
 # After successful execution, this file is archived to .github/workflows/audit/.
 
 script: |
+  import { createHash } from 'node:crypto';
+
   const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
   const API_TOKEN  = process.env.CLOUDFLARE_API_TOKEN;
   const DB_ID      = process.env.SRN_D1_ID;
@@ -49,7 +51,7 @@ script: |
       language   || 'und',
       archiveMd5 || '',
     ].join('|');
-    return crypto.createHash('md5').update(key).digest('hex');
+    return createHash('md5').update(key).digest('hex');
   }
 
   async function main() {

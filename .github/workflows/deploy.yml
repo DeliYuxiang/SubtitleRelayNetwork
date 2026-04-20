@@ -87,6 +87,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Validate required secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
+        run: |
+          MISSING=()
+          [ -z "$CLOUDFLARE_API_TOKEN"  ] && MISSING+=("CLOUDFLARE_API_TOKEN")
+          [ -z "$CLOUDFLARE_ACCOUNT_ID" ] && MISSING+=("CLOUDFLARE_ACCOUNT_ID")
+          [ -z "$TMDB_TOKEN"            ] && MISSING+=("TMDB_TOKEN")
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "::error::Missing required secrets: ${MISSING[*]}"
+            exit 1
+          fi
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -127,6 +142,7 @@ jobs:
         env:
           SRN_PUBKEY_WHITELIST: ${{ vars.SRN_PUBKEY_WHITELIST }}
           SRN_POW_DIFFICULTY: ${{ vars.SRN_POW_DIFFICULTY || '0' }}
+          CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
           WRANGLER_NON_INTERACTIVE: "true"
 
       - name: Upload Secrets & Configure Lifecycle Rules
@@ -388,6 +404,7 @@ jobs:
         env:
           SRN_PUBKEY_WHITELIST: ${{ vars.SRN_PUBKEY_WHITELIST }}
           SRN_POW_DIFFICULTY: ${{ vars.SRN_POW_DIFFICULTY || '0' }}
+          CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
 
       - name: Deploy Worker
         id: worker_deploy
@@ -468,6 +485,7 @@ jobs:
         env:
           SRN_PUBKEY_WHITELIST: ${{ vars.SRN_PUBKEY_WHITELIST }}
           SRN_POW_DIFFICULTY: ${{ vars.SRN_POW_DIFFICULTY || '0' }}
+          CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
           WRANGLER_NON_INTERACTIVE: "true"
 
       # --- Path A: DB was touched → restore from backup + rollback code ---

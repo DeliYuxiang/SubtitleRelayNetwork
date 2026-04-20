@@ -84,11 +84,6 @@
         { "binding": "BUCKET",        "bucket_name": "srn-assets-preview" },
         { "binding": "BACKUP_BUCKET", "bucket_name": "srn-assets-preview" }
       ],
-      "vars": {
-        "SRN_PUBKEY_WHITELIST": "",
-        "SRN_POW_DIFFICULTY": "0",
-        "SRN_POW_SECRET": "preview-secret"
-      },
       // namespace_ids 2001-2003 isolate preview rate-limit counters from production (1001-1003)
       "unsafe": {
         "bindings": [
@@ -114,12 +109,6 @@
         { "binding": "BUCKET",        "bucket_name": "srn-assets-prod" },
         { "binding": "BACKUP_BUCKET", "bucket_name": "srn-backup-prod" }
       ],
-      "vars": {
-        "SRN_PUBKEY_WHITELIST": "",
-        "SRN_POW_DIFFICULTY": "0",
-        // Overridden via --var SRN_POW_SECRET at deploy time
-        "SRN_POW_SECRET": "replace-via---var-at-deploy-time"
-      },
       "unsafe": {
         "bindings": [
           { "name": "SEARCH_LIMITER",  "type": "ratelimit", "namespace_id": "1001", "simple": { "limit": 3,   "period": 60 } },

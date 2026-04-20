@@ -74,6 +74,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate required secrets
+        env:
+          RELAY_PUBLIC_KEY: ${{ secrets.RELAY_PUBLIC_KEY }}
+          TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
+        run: |
+          MISSING=()
+          [ -z "$CLOUDFLARE_API_TOKEN"  ] && MISSING+=("CLOUDFLARE_API_TOKEN")
+          [ -z "$CLOUDFLARE_ACCOUNT_ID" ] && MISSING+=("CLOUDFLARE_ACCOUNT_ID")
+          [ -z "$RELAY_PUBLIC_KEY"      ] && MISSING+=("RELAY_PUBLIC_KEY")
+          [ -z "$TMDB_TOKEN"            ] && MISSING+=("TMDB_TOKEN")
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "::error::Missing required secrets: ${MISSING[*]}"
+            exit 1
+          fi
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -128,6 +143,9 @@ jobs:
           SRN_PREVIEW_D1_NAME: ${{ needs.resolve-infra.outputs.d1_name }}
           SRN_PREVIEW_D1_ID: ${{ needs.resolve-infra.outputs.d1_id }}
           SRN_PREVIEW_R2_NAME: ${{ needs.resolve-infra.outputs.r2_name }}
+          SRN_PUBKEY_WHITELIST: ${{ vars.SRN_PUBKEY_WHITELIST }}
+          SRN_POW_DIFFICULTY: ${{ vars.SRN_POW_DIFFICULTY || '0' }}
+          CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
 
       - name: Apply preview schema migrations
         run: |

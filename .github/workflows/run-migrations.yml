@@ -48,35 +48,20 @@ jobs:
           echo "::notice::Found ${#MIGRATIONS[@]} pending migration(s)."
 
           for f in "${MIGRATIONS[@]}"; do
-            MIGRATION_NAME=$(python3 -c "
-            import yaml, sys
-            try:
-                d = yaml.safe_load(open('$f'))
-                print(d.get('name', '$f'))
-            except Exception as e:
-                print('$f')
-            " 2>/dev/null)
-                      echo "::group::$MIGRATION_NAME"
+            MIGRATION_NAME=$(python3 .github/workflows/scripts/migration_get_name.py "$f" 2>/dev/null || echo "$f")
+            echo "::group::$MIGRATION_NAME"
             echo "File: $f"
 
             # Extract the script field and write to a temp file
-            python3 -c "
-            import yaml, sys
-            d = yaml.safe_load(open('$f'))
-            script = d.get('script', '')
-            if not script:
-                print('ERROR: migration file has no script field', file=sys.stderr)
-                sys.exit(1)
-            sys.stdout.write(script)
-            " > /tmp/migration_script.mjs
+            python3 .github/workflows/scripts/migration_extract_script.py "$f" > /tmp/migration_script.mjs
 
-                        node /tmp/migration_script.mjs
+            node /tmp/migration_script.mjs
 
-                        mkdir -p .github/workflows/audit
-                        mv "$f" ".github/workflows/audit/$(basename $f)"
-                        echo "Archived: $f → .github/workflows/audit/$(basename $f)"
-                        echo "::endgroup::"
-                      done
+            mkdir -p .github/workflows/audit
+            mv "$f" ".github/workflows/audit/$(basename $f)"
+            echo "Archived: $f → .github/workflows/audit/$(basename $f)"
+            echo "::endgroup::"
+          done
 
       - name: Commit archived migrations
         run: |

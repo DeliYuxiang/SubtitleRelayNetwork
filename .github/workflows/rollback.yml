@@ -54,6 +54,19 @@ jobs:
       - name: Code & Database Rollback
         run: |
           echo "::warning::Step 1: RESTORING DATABASE..."
+
+          # Dynamically drop all user tables by querying sqlite_master
+          TABLES=$(wrangler d1 execute ${{ secrets.SRN_D1_NAME }} --remote \
+            --command "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'" \
+            --json | jq -r '.[0].results[].name')
+
+          {
+            echo "PRAGMA foreign_keys=OFF;"
+            for t in $TABLES; do echo "DROP TABLE IF EXISTS \"$t\";"; done
+            echo "PRAGMA foreign_keys=ON;"
+          } > /tmp/reset_db.sql
+
+          wrangler d1 execute ${{ secrets.SRN_D1_NAME }} --remote --file=/tmp/reset_db.sql --yes
           wrangler d1 execute ${{ secrets.SRN_D1_NAME }} --remote --file=rollback.sql --yes
           
           if [ -n "${{ steps.fetch_backup.outputs.commit_sha }}" ]; then

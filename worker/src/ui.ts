@@ -3,7 +3,10 @@
  */
 import { RELAY_VERSION } from "./types";
 
-export const renderLandingPage = (stats: { totalEvents: number }) => `
+export const renderLandingPage = (stats: {
+  totalEvents: number;
+  totalFiles: number;
+}) => `
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -373,6 +376,7 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
             </div>
         </main>
 
+
         <footer>
             SRN CLOUDLESS ${RELAY_VERSION} · 去中心化字幕索引网络
         </footer>
@@ -425,7 +429,7 @@ export const renderLandingPage = (stats: { totalEvents: number }) => `
         function initApp() {
             return {
                 searchInput: '',
-                tmdbEnabled: true,
+                tmdbEnabled: false,
                 loading: false,
                 results: [],
                 suggestions: [],

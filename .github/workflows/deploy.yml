@@ -164,7 +164,7 @@ jobs:
           cd worker
 
           # 1. Read previously deployed SHA and URL from R2 (written by Deploy Worker step)
-          wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt 2>/dev/null || true
+          npx wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt 2>/dev/null || true
           SHORT_SHA=$(cat /tmp/deployed_sha.txt 2>/dev/null | tr -d '[:space:]')
           if [ -z "$SHORT_SHA" ]; then
             SHORT_SHA="initial"
@@ -172,7 +172,7 @@ jobs:
           echo "::notice::Currently deployed SHA: $SHORT_SHA"
 
           # 1b. Check if server is already in maintenance mode.
-          wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt 2>/dev/null || true
+          npx wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt 2>/dev/null || true
           LIVE_URL=$(cat /tmp/deployed_url.txt 2>/dev/null | tr -d '[:space:]')
           if [ -n "$LIVE_URL" ]; then
             HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$LIVE_URL/v1/health" 2>/dev/null || echo "000")
@@ -284,37 +284,37 @@ jobs:
 
           printf '%s' "$NEW_RELAY_PRIVKEY" | npx wrangler secret put RELAY_PRIVATE_KEY
 
-          cat > PROVISION_INFO.md << EOF
-# Infrastructure Provisioned
-
-Resources created by bootstrap on branch \`$BRANCH_NAME\`.
-
-## Step 1: Add GitHub Secrets (keypair only)
-
-| Secret | Where to find the value |
-|--------|-------------------------|
-| RELAY_PUBLIC_KEY  | See CI notice output for this run |
-| RELAY_PRIVATE_KEY | See CI notice output for this run |
-
-## Step 2: Import resources into Terraform state
-
-Run these commands locally (replace ACCOUNT_ID with your Cloudflare account ID):
-
-\`\`\`bash
-cd infra/terraform
-terraform init ...   # see terraform.yml for backend-config flags
-terraform import cloudflare_d1_database.production        ACCOUNT_ID/$D1_ID
-terraform import cloudflare_r2_bucket.production_assets   ACCOUNT_ID/$R2_NAME
-terraform import cloudflare_r2_bucket.production_backup   ACCOUNT_ID/$BACKUP_R2_NAME
-\`\`\`
-
-Also set these GitHub Actions Variables (not Secrets) to match the provisioned names:
-- TF_PRODUCTION_D1_NAME = $DB_NAME
-- TF_PRODUCTION_R2_NAME = $R2_NAME
-- TF_PRODUCTION_BACKUP_R2_NAME = $BACKUP_R2_NAME
-
-Delete this file after completing both steps.
-EOF
+          {
+            echo "# Infrastructure Provisioned"
+            echo ""
+            echo "Resources created by bootstrap on branch \`$BRANCH_NAME\`."
+            echo ""
+            echo "## Step 1: Add GitHub Secrets (keypair only)"
+            echo ""
+            echo "| Secret | Where to find the value |"
+            echo "|--------|-------------------------|"
+            echo "| RELAY_PUBLIC_KEY  | See CI notice output for this run |"
+            echo "| RELAY_PRIVATE_KEY | See CI notice output for this run |"
+            echo ""
+            echo "## Step 2: Import resources into Terraform state"
+            echo ""
+            echo "Run these commands locally (replace ACCOUNT_ID with your Cloudflare account ID):"
+            echo ""
+            echo '```bash'
+            echo "cd infra/terraform"
+            echo "terraform init ...   # see terraform.yml for backend-config flags"
+            echo "terraform import cloudflare_d1_database.production        ACCOUNT_ID/$D1_ID"
+            echo "terraform import cloudflare_r2_bucket.production_assets   ACCOUNT_ID/$R2_NAME"
+            echo "terraform import cloudflare_r2_bucket.production_backup   ACCOUNT_ID/$BACKUP_R2_NAME"
+            echo '```'
+            echo ""
+            echo "Also set these GitHub Actions Variables (not Secrets) to match the provisioned names:"
+            echo "- TF_PRODUCTION_D1_NAME = $DB_NAME"
+            echo "- TF_PRODUCTION_R2_NAME = $R2_NAME"
+            echo "- TF_PRODUCTION_BACKUP_R2_NAME = $BACKUP_R2_NAME"
+            echo ""
+            echo "Delete this file after completing both steps."
+          } > PROVISION_INFO.md
 
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -405,36 +405,20 @@ EOF
           echo "$DEPLOY_OUTPUT"
 
           echo -n "$SHORT_SHA" > /tmp/deployed_sha.txt
-          wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt
+          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt
 
           DEPLOYED_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE "https://[a-zA-Z0-9.-]+\.workers\.dev" | head -n 1)
           echo -n "$DEPLOYED_URL" > /tmp/deployed_url.txt
-          wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt
+          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt
           echo "deployed_url=$DEPLOYED_URL" >> $GITHUB_OUTPUT
 
-          git ls-remote --heads origin "refs/heads/infra/provision-*" | awk '{print $2}' | sed 's|refs/heads/||' | while read branch; do
-            git push origin --delete $branch || true
-          done
-
-      - name: Update Registry (README & RELAYS)
-        if: github.ref_name == 'main'
+      - name: Cleanup provision branches
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          DEPLOYED_URL="${{ steps.worker_deploy.outputs.deployed_url }}"
-          if [ -n "$DEPLOYED_URL" ]; then
-            git config --global user.name "github-actions[bot]"
-            git config --global user.email "github-actions[bot]@users.noreply.github.com"
-            git reset --hard
-            git pull --rebase origin main
-
-            sed -i "s|\[pending deployment\]|$DEPLOYED_URL|g" README.md
-            sed -i "/## 原初中继/,/## 社区中继/s|\[pending deployment\]|$DEPLOYED_URL|g" RELAYS.md
-
-            git add README.md RELAYS.md
-            git commit -m "docs: sync live relay registry [skip ci]" || echo "No changes"
-            git push origin main
-          fi
+          git ls-remote --heads origin "refs/heads/infra/provision-*" | awk '{print $2}' | sed 's|refs/heads/||' | while read branch; do
+            git push origin --delete "$branch" || true
+          done
 
   # -------------------------------------------------------------------------
   # Emergency restore: fires if ANY of the three deploy phases fail.
@@ -540,7 +524,7 @@ EOF
           npm ci
           npx wrangler deploy --config wrangler.production.jsonc --var MAINTENANCE_MODE:false
           echo -n "$PREV_SHA" > /tmp/deployed_sha.txt
-          wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt
+          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt
           echo "::notice::Emergency rollback complete — live at $PREV_SHA, DB restored from $BACKUP_FILE"
 
       # --- Path B: Only finalize-deploy failed → DB is clean, just turn maintenance off ---

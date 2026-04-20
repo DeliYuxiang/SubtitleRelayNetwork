@@ -46,3 +46,4 @@ go.mod
 **/*.nfs*
 /bbs.md
 /.wrangler
+infra/terraform/terraform

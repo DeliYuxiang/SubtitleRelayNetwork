@@ -1,6 +1,6 @@
 # SRN (Subtitle Relay Network) — Cloudless v2.1
 
-[![SRN Status](https://img.shields.io/endpoint?url=https://srn-worker.delibill.workers.dev/v1/health)](https://srn-worker.delibill.workers.dev)
+[![SRN Status](https://img.shields.io/endpoint?url=https://srn.majiyabakunai.moe/v1/health)](https://srn.majiyabakunai.moe)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](./LICENSE)
 
 SRN (Subtitle Relay Network) 不是一个简单的字幕库，而是一套**去中心化的状态同步协议**。它遵循 **"Dumb Relays, Smart Clients"** 设计哲学：中继节点（Relay）仅作为高性能的消息转发器与存储索引，一切过滤与逻辑由用户侧的智能客户端完成。
@@ -30,7 +30,7 @@ SRN 是以下基础设施项目的核心组件：
 
 | 节点名称 | URL | 公钥 | 状态 |
 | :--- | :--- | :--- | :--- |
-| 原初节点 ⭐ | `https://srn-worker.delibill.workers.dev` | <details><summary>查看公钥</summary><code>cb469165d6b1be0d932fd77bce3eff9c2a4ea728ef600e867fc638de04e4a5dd</code></details> | [![Status](https://img.shields.io/endpoint?url=https://srn-worker.delibill.workers.dev/v1/health)](https://srn-worker.delibill.workers.dev) |
+| 原初节点 ⭐ | `https://srn.majiyabakunai.moe` | <details><summary>查看公钥</summary><code>cb469165d6b1be0d932fd77bce3eff9c2a4ea728ef600e867fc638de04e4a5dd</code></details> | [![Status](https://img.shields.io/endpoint?url=https://srn.majiyabakunai.moe/v1/health)](https://srn.majiyabakunai.moe) |
 | *社区节点（欢迎提交 PR）* | — | — | — |
 
 > **部署自己的节点**：Fork 本仓库，在 GitHub Secrets 中配置 `CLOUDFLARE_API_TOKEN`，Workflow 会全自动完成基础设施申请与部署。详见下方[部署指南](#%EF%B8%8F-部署指南)。

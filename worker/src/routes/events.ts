@@ -280,6 +280,45 @@ events.openapi(
     }
 
     const now = Math.floor(Date.now() / 1000);
+
+    // Compute dedup hash for Kind 1001 — reused in the event_metadata INSERT below.
+    // Formula must match migration_0009_dedup_hash.yml backfill script exactly:
+    //   MD5(pubkey|content_md5|tmdb_id|season_num|episode_num|language|archive_md5)
+    let dedupHash: string | null = null;
+    if (kind === 1001) {
+      const hashBuf = await crypto.subtle.digest(
+        "MD5",
+        new TextEncoder().encode(
+          [
+            pubKeyHex,
+            contentMd5,
+            String(eventObj.tmdb_id ?? ""),
+            String(eventObj.season_num || 0),
+            String(eventObj.episode_num || 0),
+            eventObj.language || "und",
+            eventObj.archive_md5 || "",
+          ].join("|"),
+        ),
+      );
+      dedupHash = Array.from(new Uint8Array(hashBuf))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+
+      const existing = await c.env.DB.prepare(
+        "SELECT event_id FROM event_metadata WHERE dedup_hash = ?",
+      )
+        .bind(dedupHash)
+        .first<{ event_id: string }>();
+
+      if (existing) {
+        return c.json({
+          success: true,
+          id: existing.event_id,
+          deduplicated: true,
+        });
+      }
+    }
+
     const eventRes = await c.env.DB.prepare(
       "INSERT OR IGNORE INTO events (id, pubkey, kind, content_md5, tags, sig, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
@@ -354,7 +393,7 @@ events.openapi(
     if (hasContent) {
       statements.push(
         c.env.DB.prepare(
-          "INSERT OR IGNORE INTO event_metadata (event_id, tmdb_id, season_num, episode_num, language, archive_md5) VALUES (?, ?, ?, ?, ?, ?)",
+          "INSERT OR IGNORE INTO event_metadata (event_id, tmdb_id, season_num, episode_num, language, archive_md5, dedup_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
         ).bind(
           eventObj.id,
           eventObj.tmdb_id,
@@ -362,6 +401,7 @@ events.openapi(
           eventObj.episode_num || 0,
           eventObj.language || "und",
           eventObj.archive_md5 || "",
+          dedupHash,
         ),
       );
 

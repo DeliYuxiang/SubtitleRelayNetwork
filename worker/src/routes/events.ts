@@ -176,7 +176,15 @@ events.openapi(
 
     const headers = new Headers();
     object.writeHttpMetadata(headers);
-    return new Response(object.body, { headers }) as any;
+    // Decompress server-side: Cloudflare's CDN layer can strip or mangle
+    // Content-Encoding: gzip in transit, delivering raw gzip bytes to clients.
+    // Explicitly decompress here so clients always receive plain text.
+    const isGzipped = headers.get("content-encoding") === "gzip";
+    headers.delete("content-encoding");
+    const body = isGzipped
+      ? object.body.pipeThrough(new DecompressionStream("gzip"))
+      : object.body;
+    return new Response(body, { headers }) as any;
   },
 );
 

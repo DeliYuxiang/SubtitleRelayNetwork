@@ -20,9 +20,10 @@ jobs:
   terraform:
     runs-on: ubuntu-latest
     name: Terraform Plan / Apply
-    # Skip entirely if R2 backend credentials are not yet configured.
-    # Set TF_R2_ACCESS_KEY_ID + TF_R2_SECRET_ACCESS_KEY in GitHub Secrets to enable.
-    if: ${{ secrets.TF_R2_ACCESS_KEY_ID != '' }}
+    # Skip until R2 backend is provisioned.
+    # To enable: set repository Variable TERRAFORM_ENABLED = true
+    # (GitHub → Settings → Secrets and variables → Variables)
+    if: ${{ vars.TERRAFORM_ENABLED == 'true' }}
     permissions:
       contents: read
       pull-requests: write    # for posting plan as PR comment

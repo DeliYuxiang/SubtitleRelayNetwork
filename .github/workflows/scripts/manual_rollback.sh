@@ -22,7 +22,10 @@ set -euo pipefail
 ENV_FILE="$(git rev-parse --show-toplevel)/worker/.env"
 if [ -f "$ENV_FILE" ]; then
   echo "→ Loading env from $ENV_FILE"
-  set -a; source "$ENV_FILE"; set +a
+  set -a
+  # shellcheck source=../../../worker/.env
+  source "$ENV_FILE"
+  set +a
 else
   echo "WARNING: $ENV_FILE not found — falling back to shell environment" >&2
 fi

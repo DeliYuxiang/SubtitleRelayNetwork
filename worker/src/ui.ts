@@ -18,6 +18,7 @@ export const renderLandingPage = (stats: {
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/jszip@3/dist/jszip.min.js"></script>
     <style>
         :root {
             --primary: #2563eb;
@@ -574,20 +575,35 @@ export const renderLandingPage = (stats: {
                     this.seasonCounts = counts;
                 },
 
-                async downloadSingle(item) {
+                async fetchBlob(item) {
                     const res = await this.srnFetchDownload(\`/v1/events/\${item.id}/content\`);
-                    if (!res.ok) { alert('下载失败'); return; }
-                    const blob = await res.blob();
+                    if (!res.ok) return null;
+                    return res.blob();
+                },
+
+                async downloadSingle(item) {
+                    const blob = await this.fetchBlob(item);
+                    if (!blob) { alert('下载失败'); return; }
                     const a = document.createElement('a');
                     a.href = URL.createObjectURL(blob);
-                    a.download = item.filename || \`SRN_\${item.id}.ass\`;
+                    a.download = item.filename || \`SRN_E\${String(item.episode_num ?? '?').padStart(2,'0')}_\${item.id}.ass\`;
                     a.click();
                 },
 
                 async downloadLangPack(season, lang, items) {
-                    for (const item of items) {
-                        await this.downloadSingle(item);
-                    }
+                    const zip = new JSZip();
+                    await Promise.all(items.map(async item => {
+                        const blob = await this.fetchBlob(item);
+                        if (blob) {
+                            const name = item.filename || \`E\${String(item.episode_num ?? '?').padStart(2,'0')}_\${item.id}.ass\`;
+                            zip.file(name, blob);
+                        }
+                    }));
+                    const zipBlob = await zip.generateAsync({ type: 'blob' });
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(zipBlob);
+                    a.download = \`SRN_S\${String(season ?? '00').padStart(2,'0')}_\${lang}.zip\`;
+                    a.click();
                 }
             };
         }

@@ -163,13 +163,27 @@ jobs:
         run: |
           cd worker
 
-          # 1. Read previously deployed SHA from R2 (written by Deploy Worker step)
+          # 1. Read previously deployed SHA and URL from R2 (written by Deploy Worker step)
           wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt 2>/dev/null || true
           SHORT_SHA=$(cat /tmp/deployed_sha.txt 2>/dev/null | tr -d '[:space:]')
           if [ -z "$SHORT_SHA" ]; then
             SHORT_SHA="initial"
           fi
           echo "::notice::Currently deployed SHA: $SHORT_SHA"
+
+          # 1b. Check if server is already in maintenance mode.
+          #     503 means a previous deploy cycle crashed without completing rollback —
+          #     do NOT overwrite the last good backup; require manual intervention.
+          wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt 2>/dev/null || true
+          LIVE_URL=$(cat /tmp/deployed_url.txt 2>/dev/null | tr -d '[:space:]')
+          if [ -n "$LIVE_URL" ]; then
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$LIVE_URL/v1/health" 2>/dev/null || echo "000")
+            if [ "$HTTP_STATUS" = "503" ]; then
+              echo "::error::Server is already in maintenance mode (HTTP 503). The previous deploy cycle may have crashed before rollback completed. Resolve manually before re-deploying."
+              exit 1
+            fi
+            echo "::notice::Server status: HTTP $HTTP_STATUS — proceeding."
+          fi
 
           HEAD_SHA=$(git rev-parse --short HEAD)
           if [ "$SHORT_SHA" = "$HEAD_SHA" ]; then
@@ -383,11 +397,13 @@ jobs:
             --var RELAY_PUBLIC_KEY:"$RELAY_PUBLIC_KEY")
           echo "$DEPLOY_OUTPUT"
 
-          # Record deployed SHA in R2 so the next pre-deploy step can read it reliably
+          # Record deployed SHA and URL in R2 for use by the next pre-deploy step
           echo -n "$SHORT_SHA" > /tmp/deployed_sha.txt
           wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt
 
           DEPLOYED_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE "https://[a-zA-Z0-9.-]+\.workers\.dev" | head -n 1)
+          echo -n "$DEPLOYED_URL" > /tmp/deployed_url.txt
+          wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt
           echo "deployed_url=$DEPLOYED_URL" >> $GITHUB_OUTPUT
 
           git ls-remote --heads origin "refs/heads/infra/provision-*" | awk '{print $2}' | sed 's|refs/heads/||' | while read branch; do

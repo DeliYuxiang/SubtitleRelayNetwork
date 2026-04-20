@@ -40,8 +40,3 @@ variable "preview_r2_name" {
   default     = "srn-assets-preview"
 }
 
-variable "backup_retention_days" {
-  description = "Number of days before backup objects in the backup bucket are automatically deleted"
-  type        = number
-  default     = 90
-}

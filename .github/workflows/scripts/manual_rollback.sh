@@ -18,10 +18,19 @@
 
 set -euo pipefail
 
+# ── Load env from worker/.env ─────────────────────────────────────────────────
+ENV_FILE="$(git rev-parse --show-toplevel)/worker/.env"
+if [ -f "$ENV_FILE" ]; then
+  echo "→ Loading env from $ENV_FILE"
+  set -a; source "$ENV_FILE"; set +a
+else
+  echo "WARNING: $ENV_FILE not found — falling back to shell environment" >&2
+fi
+
 # ── Validate env ──────────────────────────────────────────────────────────────
 for var in CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN SRN_D1_NAME SRN_D1_ID SRN_R2_NAME SRN_BACKUP_R2_NAME RELAY_PUBLIC_KEY; do
   if [ -z "${!var:-}" ]; then
-    echo "ERROR: $var is not set" >&2
+    echo "ERROR: $var is not set (add it to worker/.env)" >&2
     exit 1
   fi
 done

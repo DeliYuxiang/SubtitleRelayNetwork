@@ -127,7 +127,14 @@ tmdb.openapi(
     );
 
     const data: any = await response.json();
-    const results = (data.results || [])
+    if (!response.ok || !Array.isArray(data.results)) {
+      console.error(
+        `TMDB API error: HTTP ${response.status}`,
+        JSON.stringify(data),
+      );
+      return c.json({ error: "TMDB upstream error" }, 502);
+    }
+    const results = (data.results as any[])
       .filter((r: any) => r.media_type === "movie" || r.media_type === "tv")
       .map((r: any) => ({
         id: r.id,

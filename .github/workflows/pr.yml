@@ -156,6 +156,16 @@ jobs:
           PREVIEW_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE "https://[a-zA-Z0-9.-]+\.workers\.dev" | head -n 1)
           echo "preview_url=${PREVIEW_URL}" >> $GITHUB_OUTPUT
 
+      - name: Inject preview secrets
+        env:
+          TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
+        run: |
+          cd worker
+          if [ -n "$TMDB_TOKEN" ]; then
+            printf '%s' "$TMDB_TOKEN" | npx wrangler secret put TMDB_TOKEN \
+              --config wrangler.preview.jsonc
+          fi
+
       - name: Post preview URL to PR
         if: steps.deploy.outputs.preview_url != ''
         env:

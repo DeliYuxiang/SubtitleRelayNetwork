@@ -158,16 +158,15 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SRN_BACKUP_R2_NAME: ${{ secrets.SRN_BACKUP_R2_NAME }}
           WRANGLER_NON_INTERACTIVE: "true"
         run: |
           cd worker
 
-          # 1. Query live SHA
-          WORKERS_SUBDOMAIN=$(curl -sf "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/workers/subdomain" \
-            -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" | jq -r '.result.subdomain')
-          LIVE_URL="https://srn-worker.${WORKERS_SUBDOMAIN}.workers.dev"
-          SHORT_SHA=$(curl -sf "$LIVE_URL/v1/identity" | jq -r '.commit // empty')
-          if [ -z "$SHORT_SHA" ] || [ "$SHORT_SHA" = "unknown" ]; then
+          # 1. Read previously deployed SHA from R2 (written by Deploy Worker step)
+          wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt 2>/dev/null || true
+          SHORT_SHA=$(cat /tmp/deployed_sha.txt 2>/dev/null | tr -d '[:space:]')
+          if [ -z "$SHORT_SHA" ]; then
             SHORT_SHA="initial"
           fi
           echo "::notice::Currently deployed SHA: $SHORT_SHA"
@@ -373,14 +372,20 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SRN_BACKUP_R2_NAME: ${{ secrets.SRN_BACKUP_R2_NAME }}
           RELAY_PUBLIC_KEY: ${{ secrets.RELAY_PUBLIC_KEY }}
           WRANGLER_NON_INTERACTIVE: "true"
         run: |
           cd worker
+          SHORT_SHA=$(git rev-parse --short HEAD)
           DEPLOY_OUTPUT=$(npx wrangler deploy \
-            --var COMMIT_SHA:$(git rev-parse --short HEAD) \
+            --var COMMIT_SHA:"$SHORT_SHA" \
             --var RELAY_PUBLIC_KEY:"$RELAY_PUBLIC_KEY")
           echo "$DEPLOY_OUTPUT"
+
+          # Record deployed SHA in R2 so the next pre-deploy step can read it reliably
+          echo -n "$SHORT_SHA" > /tmp/deployed_sha.txt
+          wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt
 
           DEPLOYED_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE "https://[a-zA-Z0-9.-]+\.workers\.dev" | head -n 1)
           echo "deployed_url=$DEPLOYED_URL" >> $GITHUB_OUTPUT
@@ -518,6 +523,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SRN_BACKUP_R2_NAME: ${{ secrets.SRN_BACKUP_R2_NAME }}
           WRANGLER_NON_INTERACTIVE: "true"
         run: |
           BACKUP_FILE="${{ needs.deploy-or-bootstrap.outputs.backup_file }}"
@@ -534,6 +540,8 @@ jobs:
           cd worker
           npm install
           npx wrangler deploy --var MAINTENANCE_MODE:false
+          echo -n "$PREV_SHA" > /tmp/deployed_sha.txt
+          wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt
           echo "::notice::Emergency rollback complete — live at $PREV_SHA, DB restored from $BACKUP_FILE"
 
       # --- Path B: Only finalize-deploy failed → DB is clean, just turn maintenance off ---

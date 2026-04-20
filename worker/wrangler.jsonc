@@ -35,7 +35,9 @@
     // Base difficulty: number of leading zero hex chars required in SHA-256 hash.
     "SRN_POW_DIFFICULTY": "0",
     // Secret salt for PoW computation.
-    "SRN_POW_SECRET": "dev-secret-replace-in-production"
+    "SRN_POW_SECRET": "dev-secret-replace-in-production",
+    // Comma-separated allowed CORS origins.
+    "CORS_ORIGINS": "https://srnfrontend.pages.dev"
   },
   "unsafe": {
     "bindings": [

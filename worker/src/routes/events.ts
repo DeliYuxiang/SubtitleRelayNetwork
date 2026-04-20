@@ -1,10 +1,42 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { Bindings } from "../types";
+import { Bindings, ErrorSchema } from "../types";
 import {
   verifySignedRequest,
   verifyDownloadRequest,
   isVip,
 } from "../lib/verify-pubkey";
+
+const EventSchema = z.object({
+  id: z.string(),
+  pubkey: z.string(),
+  kind: z.number().int(),
+  content_md5: z.string(),
+  tags: z.string().describe("JSON-encoded tag array"),
+  sig: z.string(),
+  created_at: z.number().int(),
+  tmdb_id: z.string().nullable().optional(),
+  season_num: z.number().int().nullable().optional(),
+  episode_num: z.number().int().nullable().optional(),
+  language: z.string().nullable().optional(),
+  archive_md5: z.string().nullable().optional(),
+  source_type: z.string().nullable().optional(),
+  source_uri: z.string().nullable().optional(),
+});
+
+const errorResponses = {
+  401: {
+    description: "Signature verification failed or auth expired",
+    content: { "application/json": { schema: ErrorSchema } },
+  },
+  403: {
+    description: "PoW verification failed",
+    content: { "application/json": { schema: ErrorSchema } },
+  },
+  429: {
+    description: "Rate limited",
+    content: { "application/json": { schema: ErrorSchema } },
+  },
+} as const;
 
 const events = new OpenAPIHono<{ Bindings: Bindings }>();
 
@@ -45,12 +77,11 @@ events.openapi(
         description: "List of events",
         content: {
           "application/json": {
-            schema: z.object({ events: z.array(z.any()) }),
+            schema: z.object({ events: z.array(EventSchema) }),
           },
         },
       },
-      401: { description: "Signature verification failed" },
-      403: { description: "PoW verification failed" },
+      ...errorResponses,
     },
   }),
   async (c) => {
@@ -139,12 +170,14 @@ events.openapi(
     },
     responses: {
       200: {
-        description: "Subtitle file",
+        description: "Subtitle file (plain text, decompressed server-side)",
         content: { "application/octet-stream": { schema: z.any() } },
       },
-      401: { description: "Auth expired" },
-      403: { description: "PoW verification failed" },
-      404: { description: "Not found" },
+      404: {
+        description: "Event or blob not found",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      ...errorResponses,
     },
   }),
   async (c) => {
@@ -207,16 +240,31 @@ events.openapi(
     },
     responses: {
       200: {
-        description: "Success",
+        description: "Event published or deduplicated",
         content: {
           "application/json": {
-            schema: z.object({ success: z.boolean(), id: z.string() }),
+            schema: z.object({
+              success: z.boolean(),
+              id: z.string(),
+              deduplicated: z
+                .boolean()
+                .optional()
+                .describe(
+                  "True when an identical event already exists; id refers to the existing event",
+                ),
+            }),
           },
         },
       },
-      400: { description: "Bad Request" },
-      401: { description: "Unauthorized" },
-      403: { description: "PoW verification failed" },
+      400: {
+        description: "Bad request (invalid JSON, hash mismatch, missing file)",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      413: {
+        description: "File too large (max 5 MB)",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      ...errorResponses,
     },
   }),
   async (c) => {

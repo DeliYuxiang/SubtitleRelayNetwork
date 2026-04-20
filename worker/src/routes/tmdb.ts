@@ -1,6 +1,31 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { Bindings } from "../types";
+import { Bindings, ErrorSchema } from "../types";
 import { verifySignedRequest } from "../lib/verify-pubkey";
+
+const TmdbResultSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  title: z.string(),
+  poster_path: z.string().nullable(),
+  media_type: z.enum(["movie", "tv"]),
+  release_date: z.string(),
+  first_air_date: z.string(),
+});
+
+const tmdbErrorResponses = {
+  401: {
+    description: "Signature verification failed",
+    content: { "application/json": { schema: ErrorSchema } },
+  },
+  403: {
+    description: "PoW verification failed",
+    content: { "application/json": { schema: ErrorSchema } },
+  },
+  429: {
+    description: "Rate limited",
+    content: { "application/json": { schema: ErrorSchema } },
+  },
+} as const;
 
 const tmdb = new OpenAPIHono<{ Bindings: Bindings }>();
 
@@ -31,12 +56,11 @@ tmdb.openapi(
         description: "Search results",
         content: {
           "application/json": {
-            schema: z.object({ results: z.array(z.any()) }),
+            schema: z.object({ results: z.array(TmdbResultSchema) }),
           },
         },
       },
-      401: { description: "Unauthorized" },
-      403: { description: "PoW verification failed" },
+      ...tmdbErrorResponses,
     },
   }),
   async (c) => {
@@ -156,12 +180,13 @@ tmdb.openapi(
         description: "Season info",
         content: {
           "application/json": {
-            schema: z.object({ episode_count: z.number() }),
+            schema: z.object({
+              episode_count: z.number().int().min(0),
+            }),
           },
         },
       },
-      401: { description: "Unauthorized" },
-      403: { description: "PoW verification failed" },
+      ...tmdbErrorResponses,
     },
   }),
   async (c) => {

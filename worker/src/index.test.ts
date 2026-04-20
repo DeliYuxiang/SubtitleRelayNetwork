@@ -39,16 +39,18 @@ describe("SRN Worker Integration Tests", () => {
     `);
   });
 
-  it("should render the SPA landing page on root", async () => {
+  it("should return JSON relay info on root", async () => {
     const request = new Request("http://example.com/");
     const ctx = createExecutionContext();
     const response = await worker.fetch(request, env, ctx);
     await waitOnExecutionContext(ctx);
 
     expect(response.status).toBe(200);
-    const body = await response.text();
-    expect(body).toContain("SRN CLOUDLESS");
-    expect(body).toContain("vue@3"); // Check for Vue 3 markers
+    const data: any = await response.json();
+    expect(data.name).toBe("SRN Relay");
+    expect(data.status).toBe("online");
+    expect(data).toHaveProperty("version");
+    expect(data).toHaveProperty("totalEvents");
   });
 
   it("should return 401 for unauthenticated content request", async () => {

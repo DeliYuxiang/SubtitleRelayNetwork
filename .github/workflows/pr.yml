@@ -82,8 +82,15 @@ jobs:
       - name: Install dependencies
         run: cd worker && npm ci
 
+      - name: Detect migration changes
+        id: detect_migrations
+        run: |
+          git fetch origin ${{ github.base_ref }} --depth=1
+          CHANGED=$(git diff --name-only origin/${{ github.base_ref }} HEAD -- worker/migrations/ | wc -l)
+          echo "has_migrations=$([ "$CHANGED" -gt 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
+
       - name: Seed preview D1 from production
-        if: needs.resolve-prod-infra.outputs.infra_exists == 'true'
+        if: steps.detect_migrations.outputs.has_migrations == 'true' && needs.resolve-prod-infra.outputs.infra_exists == 'true'
         run: |
           cd worker
 
@@ -98,7 +105,7 @@ jobs:
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             -H "Content-Type: application/json" \
             -d '{"sql":"SELECT name FROM sqlite_master WHERE type=\u0027table\u0027 AND name NOT LIKE \u0027sqlite_%\u0027","params":[]}')
-          TABLES=$(echo "$QUERY_OUT" | jq -r '.result[0].results[].name | select(startswith("_cf_") | not)')
+          TABLES=$(echo "$QUERY_OUT" | jq -r '(.result[0].results // [])[] | .name | select(startswith("_cf_") | not)')
           if [ -n "$TABLES" ]; then
             {
               echo "PRAGMA foreign_keys=OFF;"
@@ -123,12 +130,14 @@ jobs:
           SRN_PREVIEW_R2_NAME: ${{ needs.resolve-infra.outputs.r2_name }}
 
       - name: Apply preview schema migrations
+        if: steps.detect_migrations.outputs.has_migrations == 'true'
         run: |
           cd worker
           npx wrangler d1 migrations apply "$PREVIEW_D1_NAME" \
             --remote --config wrangler.preview.jsonc
 
       - name: Run pending data migrations
+        if: steps.detect_migrations.outputs.has_migrations == 'true'
         run: node worker/data-migrations/run.mjs
         env:
           SRN_D1_ID: ${{ needs.resolve-infra.outputs.d1_id }}

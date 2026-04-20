@@ -141,22 +141,24 @@ tmdb.openapi(
 
     // Cache write: upsert each title into permanent knowledge base
     const now = Math.floor(Date.now() / 1000);
-    c.executionCtx.waitUntil(
-      c.env.DB.batch(
-        results.map((r: any) =>
-          c.env.DB.prepare(
-            "INSERT OR REPLACE INTO tmdb_title_cache (tmdb_id, name, type, year, poster, cached_at) VALUES (?, ?, ?, ?, ?, ?)",
-          ).bind(
-            r.id,
-            r.name,
-            r.media_type,
-            r.release_date.split("-")[0],
-            r.poster_path ?? "",
-            now,
+    if (results.length > 0) {
+      c.executionCtx.waitUntil(
+        c.env.DB.batch(
+          results.map((r: any) =>
+            c.env.DB.prepare(
+              "INSERT OR REPLACE INTO tmdb_title_cache (tmdb_id, name, type, year, poster, cached_at) VALUES (?, ?, ?, ?, ?, ?)",
+            ).bind(
+              r.id,
+              r.name,
+              r.media_type,
+              r.release_date.split("-")[0],
+              r.poster_path ?? "",
+              now,
+            ),
           ),
         ),
-      ),
-    );
+      );
+    }
 
     return c.json({ results });
   },
@@ -228,7 +230,7 @@ tmdb.openapi(
 
     if (episodeCount > 0) {
       await c.env.DB.prepare(
-        "INSERT OR REPLACE INTO tmdb_season_cache (tmdb_id, season_num, episode_count, created_at) VALUES (?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO tmdb_season_cache (tmdb_id, season_num, episode_count, cached_at) VALUES (?, ?, ?, ?)",
       )
         .bind(
           tmdbId,

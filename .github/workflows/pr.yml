@@ -9,9 +9,6 @@ on:
       - '.github/workflows/deploy.yml'
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────────────
-  # Lint, format-check, and run unit tests against the local test DB.
-  # ─────────────────────────────────────────────────────────────────────────────
   check:
     runs-on: ubuntu-latest
     name: Code Check & Test
@@ -34,19 +31,26 @@ jobs:
         run: cd worker && npm test -- --run
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # Resolve preview resource IDs from Terraform state.
+  # Skips preview deploy automatically if preview resources don't exist yet.
+  # ─────────────────────────────────────────────────────────────────────────────
+  resolve-infra:
+    needs: check
+    uses: ./.github/workflows/resolve-infra.yml
+    secrets: inherit
+    with:
+      environment: preview
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # Deploy to the shared preview environment (srn-worker-preview).
   # Isolated D1 + R2 — no maintenance mode, no backup, no data migrations.
-  # Requires GitHub Secrets: SRN_PREVIEW_D1_NAME, SRN_PREVIEW_D1_ID, SRN_PREVIEW_R2_NAME
+  # Skipped automatically if preview resources are not yet provisioned.
   # ─────────────────────────────────────────────────────────────────────────────
   preview-deploy:
-    needs: check
+    needs: [check, resolve-infra]
     runs-on: ubuntu-latest
     name: Deploy to Preview
-    # Skip if preview secrets are not configured (e.g. forks or before provisioning)
-    if: |
-      secrets.SRN_PREVIEW_D1_NAME != '' &&
-      secrets.SRN_PREVIEW_D1_ID != '' &&
-      secrets.SRN_PREVIEW_R2_NAME != ''
+    if: needs.resolve-infra.outputs.infra_exists == 'true'
     permissions:
       pull-requests: write
       contents: read
@@ -72,14 +76,14 @@ jobs:
           SRN_POW_SECRET=$(openssl rand -hex 16) \
             .github/workflows/scripts/generate_wrangler_config.sh worker/wrangler.preview.jsonc --preview
         env:
-          SRN_PREVIEW_D1_NAME: ${{ secrets.SRN_PREVIEW_D1_NAME }}
-          SRN_PREVIEW_D1_ID: ${{ secrets.SRN_PREVIEW_D1_ID }}
-          SRN_PREVIEW_R2_NAME: ${{ secrets.SRN_PREVIEW_R2_NAME }}
+          SRN_PREVIEW_D1_NAME: ${{ needs.resolve-infra.outputs.d1_name }}
+          SRN_PREVIEW_D1_ID: ${{ needs.resolve-infra.outputs.d1_id }}
+          SRN_PREVIEW_R2_NAME: ${{ needs.resolve-infra.outputs.r2_name }}
 
       - name: Apply preview schema migrations
         run: |
           cd worker
-          npx wrangler d1 migrations apply ${{ secrets.SRN_PREVIEW_D1_NAME }} \
+          npx wrangler d1 migrations apply "${{ needs.resolve-infra.outputs.d1_name }}" \
             --remote --config wrangler.preview.jsonc
 
       - name: Deploy to preview

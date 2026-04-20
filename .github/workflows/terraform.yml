@@ -33,6 +33,7 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "~1.5"
+          terraform_wrapper: false
 
       - name: Terraform Init
         run: |
@@ -58,7 +59,6 @@ jobs:
           TF_VAR_production_backup_r2_name: ${{ vars.TF_PRODUCTION_BACKUP_R2_NAME || 'srn-backup-prod' }}
           TF_VAR_preview_d1_name: ${{ vars.TF_PREVIEW_D1_NAME || 'srn-db-preview' }}
           TF_VAR_preview_r2_name: ${{ vars.TF_PREVIEW_R2_NAME || 'srn-assets-preview' }}
-          TF_VAR_backup_retention_days: ${{ vars.SRN_BACKUP_RETENTION_DAYS || '90' }}
 
       - name: Post Plan to PR
         if: github.event_name == 'pull_request'
@@ -86,7 +86,6 @@ jobs:
           TF_VAR_production_backup_r2_name: ${{ vars.TF_PRODUCTION_BACKUP_R2_NAME || 'srn-backup-prod' }}
           TF_VAR_preview_d1_name: ${{ vars.TF_PREVIEW_D1_NAME || 'srn-db-preview' }}
           TF_VAR_preview_r2_name: ${{ vars.TF_PREVIEW_R2_NAME || 'srn-assets-preview' }}
-          TF_VAR_backup_retention_days: ${{ vars.SRN_BACKUP_RETENTION_DAYS || '90' }}
 
       - name: Show Outputs
         if: github.event_name == 'push' && github.ref_name == 'main'

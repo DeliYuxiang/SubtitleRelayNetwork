@@ -15,10 +15,11 @@ on:
 #
 #   lint-format
 #       │
+#   resolve-infra  ← reads Terraform state, surfaces resource IDs
+#       │
 #   deploy-or-bootstrap  ← maintenance ON + backup + SQL migrations apply
 #       │
-#   run-data-migrations  ← discovers migrations/*.yml, runs each, archives them
-#       │                  (permanent runner: .github/workflows/run-migrations.yml)
+#   run-data-migrations  ← discovers migrations/*.mjs, runs each
 #       │
 #   finalize-deploy      ← wrangler deploy (maintenance OFF) + registry update
 #
@@ -50,20 +51,36 @@ jobs:
         run: cd worker && npm test -- --run
 
   # -------------------------------------------------------------------------
+  # Resolve production resource IDs from Terraform state.
+  # infra_exists=false → bootstrap mode (no resources yet).
+  # -------------------------------------------------------------------------
+  resolve-infra:
+    needs: [lint-format]
+    uses: ./.github/workflows/resolve-infra.yml
+    secrets: inherit
+    with:
+      environment: production
+
+  # -------------------------------------------------------------------------
   # Phase 1: Enable maintenance mode, backup D1, apply SQL schema migrations.
-  # Also handles the bootstrap path (MODE B) when secrets are absent.
+  # Also handles the bootstrap path (MODE B) when no infra exists yet.
   # -------------------------------------------------------------------------
   deploy-or-bootstrap:
-    needs: [lint-format]
+    needs: [lint-format, resolve-infra]
     if: github.ref_name == 'main'
     runs-on: ubuntu-latest
     name: Cloudflare Lifecycle
     permissions:
       contents: write
     outputs:
-      mode: ${{ steps.check_secrets.outputs.mode }}
+      mode: ${{ steps.check_mode.outputs.mode }}
       skip: ${{ steps.pre_deploy.outputs.skip }}
       backup_file: ${{ steps.pre_deploy.outputs.backup_file }}
+    env:
+      SRN_D1_NAME:        ${{ needs.resolve-infra.outputs.d1_name }}
+      SRN_D1_ID:          ${{ needs.resolve-infra.outputs.d1_id }}
+      SRN_R2_NAME:        ${{ needs.resolve-infra.outputs.r2_name }}
+      SRN_BACKUP_R2_NAME: ${{ needs.resolve-infra.outputs.backup_r2_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -80,44 +97,40 @@ jobs:
           cd worker
           npm ci
 
-      - name: Check for Infrastructure Secrets
-        id: check_secrets
+      - name: Determine Deploy Mode
+        id: check_mode
         run: |
-          MISSING=()
-          [ -z "${{ secrets.SRN_D1_ID }}" ]           && MISSING+=("SRN_D1_ID")
-          [ -z "${{ secrets.SRN_D1_NAME }}" ]         && MISSING+=("SRN_D1_NAME")
-          [ -z "${{ secrets.SRN_R2_NAME }}" ]         && MISSING+=("SRN_R2_NAME")
-          [ -z "${{ secrets.SRN_BACKUP_R2_NAME }}" ]  && MISSING+=("SRN_BACKUP_R2_NAME")
-          [ -z "${{ secrets.RELAY_PRIVATE_KEY }}" ]   && MISSING+=("RELAY_PRIVATE_KEY")
-          [ -z "${{ secrets.RELAY_PUBLIC_KEY }}" ]    && MISSING+=("RELAY_PUBLIC_KEY")
+          INFRA_EXISTS="${{ needs.resolve-infra.outputs.infra_exists }}"
+          MISSING_KEYS=()
+          [ -z "${{ secrets.RELAY_PRIVATE_KEY }}" ] && MISSING_KEYS+=("RELAY_PRIVATE_KEY")
+          [ -z "${{ secrets.RELAY_PUBLIC_KEY }}" ]  && MISSING_KEYS+=("RELAY_PUBLIC_KEY")
 
-          if [ ${#MISSING[@]} -eq 0 ]; then
+          if [ "$INFRA_EXISTS" = "true" ] && [ ${#MISSING_KEYS[@]} -eq 0 ]; then
             echo "mode=deploy" >> $GITHUB_OUTPUT
-          elif [ ${#MISSING[@]} -eq 6 ]; then
+          elif [ "$INFRA_EXISTS" = "false" ] && [ ${#MISSING_KEYS[@]} -eq 2 ]; then
             echo "mode=bootstrap" >> $GITHUB_OUTPUT
+          elif [ "$INFRA_EXISTS" = "true" ] && [ ${#MISSING_KEYS[@]} -gt 0 ]; then
+            echo "::error::Infrastructure exists in Terraform state but relay keypair secrets are missing: ${MISSING_KEYS[*]}"
+            exit 1
           else
-            echo "::error::Partial infrastructure secrets detected. Missing: ${MISSING[*]}"
+            echo "::error::No infrastructure in Terraform state but some relay secrets are already set. Run 'terraform import' to adopt existing resources."
             exit 1
           fi
 
       # --- MODE A: Deploy ---
 
       - name: Generate wrangler production config
-        if: steps.check_secrets.outputs.mode == 'deploy'
+        if: steps.check_mode.outputs.mode == 'deploy'
         run: |
           SRN_POW_SECRET=$(openssl rand -hex 16) \
             .github/workflows/scripts/generate_wrangler_config.sh worker/wrangler.production.jsonc
         env:
-          SRN_D1_NAME: ${{ secrets.SRN_D1_NAME }}
-          SRN_D1_ID: ${{ secrets.SRN_D1_ID }}
-          SRN_R2_NAME: ${{ secrets.SRN_R2_NAME }}
-          SRN_BACKUP_R2_NAME: ${{ secrets.SRN_BACKUP_R2_NAME }}
           SRN_PUBKEY_WHITELIST: ${{ vars.SRN_PUBKEY_WHITELIST }}
           SRN_POW_DIFFICULTY: ${{ vars.SRN_POW_DIFFICULTY || '0' }}
           WRANGLER_NON_INTERACTIVE: "true"
 
       - name: Upload Secrets & Configure Lifecycle Rules
-        if: steps.check_secrets.outputs.mode == 'deploy'
+        if: steps.check_mode.outputs.mode == 'deploy'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -129,9 +142,9 @@ jobs:
           printf '%s' "$RELAY_PRIVATE_KEY" | npx wrangler secret put RELAY_PRIVATE_KEY
 
           BACKUP_RETENTION=${{ vars.SRN_BACKUP_RETENTION_DAYS || 90 }}
-          npx wrangler r2 bucket lifecycle remove ${{ secrets.SRN_BACKUP_R2_NAME }} \
+          npx wrangler r2 bucket lifecycle remove "$SRN_BACKUP_R2_NAME" \
             --id "expire-old-backups" 2>/dev/null || true
-          npx wrangler r2 bucket lifecycle add ${{ secrets.SRN_BACKUP_R2_NAME }} \
+          npx wrangler r2 bucket lifecycle add "$SRN_BACKUP_R2_NAME" \
             --id "expire-old-backups" \
             --expire-days $BACKUP_RETENTION \
             || echo "::warning::Lifecycle rule update failed (check API token R2 permissions) — continuing deployment"
@@ -142,11 +155,10 @@ jobs:
 
       - name: Maintenance Mode ON + Backup + SQL Migrations
         id: pre_deploy
-        if: steps.check_secrets.outputs.mode == 'deploy'
+        if: steps.check_mode.outputs.mode == 'deploy'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          SRN_BACKUP_R2_NAME: ${{ secrets.SRN_BACKUP_R2_NAME }}
           WRANGLER_NON_INTERACTIVE: "true"
         run: |
           cd worker
@@ -160,8 +172,6 @@ jobs:
           echo "::notice::Currently deployed SHA: $SHORT_SHA"
 
           # 1b. Check if server is already in maintenance mode.
-          #     503 means a previous deploy cycle crashed without completing rollback —
-          #     do NOT overwrite the last good backup; require manual intervention.
           wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt 2>/dev/null || true
           LIVE_URL=$(cat /tmp/deployed_url.txt 2>/dev/null | tr -d '[:space:]')
           if [ -n "$LIVE_URL" ]; then
@@ -188,15 +198,15 @@ jobs:
           # 3. Backup D1, named after the currently deployed SHA
           BACKUP_FILE="backup-$(date +%Y%m%d-%H%M%S)-$SHORT_SHA.sql"
           echo "::notice::Backing up D1 to R2: $BACKUP_FILE"
-          npx wrangler d1 export ${{ secrets.SRN_D1_NAME }} --remote --output "$BACKUP_FILE"
+          npx wrangler d1 export "$SRN_D1_NAME" --remote --output "$BACKUP_FILE"
 
           LOCAL_MD5=$(md5sum "$BACKUP_FILE" | awk '{ print $1 }')
           echo "Local MD5: $LOCAL_MD5"
-          npx wrangler r2 object put "${{ secrets.SRN_BACKUP_R2_NAME }}/$BACKUP_FILE" --file "$BACKUP_FILE" --remote
+          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/$BACKUP_FILE" --file "$BACKUP_FILE" --remote
           echo "backup_file=$BACKUP_FILE" >> $GITHUB_OUTPUT
 
           echo "::notice::Verifying R2 upload integrity..."
-          npx wrangler r2 object get "${{ secrets.SRN_BACKUP_R2_NAME }}/$BACKUP_FILE" --file "verify_$BACKUP_FILE" --remote
+          npx wrangler r2 object get "$SRN_BACKUP_R2_NAME/$BACKUP_FILE" --file "verify_$BACKUP_FILE" --remote
           REMOTE_MD5=$(md5sum "verify_$BACKUP_FILE" | awk '{ print $1 }')
           rm "verify_$BACKUP_FILE"
 
@@ -206,10 +216,9 @@ jobs:
             echo "::error::MD5 Mismatch! Local: $LOCAL_MD5, Remote: $REMOTE_MD5. Backup might be corrupted."
             exit 1
           fi
-          # Keep local backup file — uploaded as artifact for emergency-restore to use directly.
 
           # 4. Apply SQL schema migrations
-          npx wrangler d1 migrations apply ${{ secrets.SRN_D1_NAME }} --remote --config wrangler.production.jsonc
+          npx wrangler d1 migrations apply "$SRN_D1_NAME" --remote --config wrangler.production.jsonc
 
       - name: Upload Backup Artifact
         if: steps.pre_deploy.outputs.backup_file != ''
@@ -221,13 +230,13 @@ jobs:
 
       # --- MODE B: Bootstrap ---
       - name: Setup Go (Bootstrap)
-        if: steps.check_secrets.outputs.mode == 'bootstrap'
+        if: steps.check_mode.outputs.mode == 'bootstrap'
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
 
       - name: Infrastructure Bootstrap
-        if: steps.check_secrets.outputs.mode == 'bootstrap'
+        if: steps.check_mode.outputs.mode == 'bootstrap'
         run: |
           cd worker
           TS=$(date +%Y%m%d-%H%M%S)
@@ -248,7 +257,7 @@ jobs:
           npx wrangler r2 bucket lifecycle add $BACKUP_R2_NAME \
             --id "expire-old-backups" \
             --expire-days $BACKUP_RETENTION \
-            || echo "::warning::Lifecycle rule update failed (check API token R2 permissions) — continuing bootstrap"
+            || echo "::warning::Lifecycle rule update failed — continuing bootstrap"
 
           D1_ID=$(npx wrangler d1 list 2>/dev/null | grep "$DB_NAME" | grep -oE "[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}" | head -n 1)
           if [ -z "$D1_ID" ]; then exit 1; fi
@@ -275,23 +284,36 @@ jobs:
 
           printf '%s' "$NEW_RELAY_PRIVKEY" | npx wrangler secret put RELAY_PRIVATE_KEY
 
-          # Write a provision-info file as the commit payload (wrangler.jsonc no longer has placeholders)
           cat > PROVISION_INFO.md << EOF
 # Infrastructure Provisioned
 
 Resources created by bootstrap on branch \`$BRANCH_NAME\`.
-Add the following as GitHub Secrets to enable future deploys:
 
-| Secret | Value |
-|--------|-------|
-| SRN_D1_ID | $D1_ID |
-| SRN_D1_NAME | $DB_NAME |
-| SRN_R2_NAME | $R2_NAME |
-| SRN_BACKUP_R2_NAME | $BACKUP_R2_NAME |
-| RELAY_PUBLIC_KEY | (see CI notice output) |
-| RELAY_PRIVATE_KEY | (see CI notice output) |
+## Step 1: Add GitHub Secrets (keypair only)
 
-Delete this file after adding the secrets.
+| Secret | Where to find the value |
+|--------|-------------------------|
+| RELAY_PUBLIC_KEY  | See CI notice output for this run |
+| RELAY_PRIVATE_KEY | See CI notice output for this run |
+
+## Step 2: Import resources into Terraform state
+
+Run these commands locally (replace ACCOUNT_ID with your Cloudflare account ID):
+
+\`\`\`bash
+cd infra/terraform
+terraform init ...   # see terraform.yml for backend-config flags
+terraform import cloudflare_d1_database.production        ACCOUNT_ID/$D1_ID
+terraform import cloudflare_r2_bucket.production_assets   ACCOUNT_ID/$R2_NAME
+terraform import cloudflare_r2_bucket.production_backup   ACCOUNT_ID/$BACKUP_R2_NAME
+\`\`\`
+
+Also set these GitHub Actions Variables (not Secrets) to match the provisioned names:
+- TF_PRODUCTION_D1_NAME = $DB_NAME
+- TF_PRODUCTION_R2_NAME = $R2_NAME
+- TF_PRODUCTION_BACKUP_R2_NAME = $BACKUP_R2_NAME
+
+Delete this file after completing both steps.
 EOF
 
           git config --global user.name "github-actions[bot]"
@@ -300,7 +322,7 @@ EOF
           git commit -m "infra: provisioning $DB_NAME, $R2_NAME, $BACKUP_R2_NAME and relay keypair"
           git push origin $BRANCH_NAME
 
-          echo "::notice::Infrastructure provisioned on '$BRANCH_NAME'. Add GitHub Secrets: SRN_D1_ID=$D1_ID  SRN_D1_NAME=$DB_NAME  SRN_R2_NAME=$R2_NAME  SRN_BACKUP_R2_NAME=$BACKUP_R2_NAME  RELAY_PUBLIC_KEY=<see notice above>  RELAY_PRIVATE_KEY=<see notice above>"
+          echo "::notice::Bootstrap complete on '$BRANCH_NAME'. Add GitHub Secrets: RELAY_PUBLIC_KEY RELAY_PRIVATE_KEY — then run terraform import (see PROVISION_INFO.md)."
           exit 1
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -310,17 +332,17 @@ EOF
 
   # -------------------------------------------------------------------------
   # Phase 2: Run pending data migrations during the maintenance window.
-  # Permanent runner — individual migration files in migrations/ are archived
-  # after execution; this job definition itself never changes.
   # -------------------------------------------------------------------------
   run-data-migrations:
-    needs: [deploy-or-bootstrap]
+    needs: [resolve-infra, deploy-or-bootstrap]
     if: |
       needs.deploy-or-bootstrap.result == 'success' &&
       needs.deploy-or-bootstrap.outputs.mode == 'deploy' &&
       needs.deploy-or-bootstrap.outputs.skip != 'true'
     uses: ./.github/workflows/run-migrations.yml
     secrets: inherit
+    with:
+      d1_id: ${{ needs.resolve-infra.outputs.d1_id }}
     permissions:
       contents: write
 
@@ -328,7 +350,7 @@ EOF
   # Phase 3: Deploy updated worker (implicitly disables maintenance mode).
   # -------------------------------------------------------------------------
   finalize-deploy:
-    needs: [deploy-or-bootstrap, run-data-migrations]
+    needs: [resolve-infra, deploy-or-bootstrap, run-data-migrations]
     if: |
       needs.deploy-or-bootstrap.result == 'success' &&
       needs.run-data-migrations.result == 'success' &&
@@ -338,6 +360,11 @@ EOF
     name: Deploy Worker & Update Registry
     permissions:
       contents: write
+    env:
+      SRN_D1_NAME:        ${{ needs.resolve-infra.outputs.d1_name }}
+      SRN_D1_ID:          ${{ needs.resolve-infra.outputs.d1_id }}
+      SRN_R2_NAME:        ${{ needs.resolve-infra.outputs.r2_name }}
+      SRN_BACKUP_R2_NAME: ${{ needs.resolve-infra.outputs.backup_r2_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -359,10 +386,6 @@ EOF
           SRN_POW_SECRET=$(openssl rand -hex 16) \
             .github/workflows/scripts/generate_wrangler_config.sh worker/wrangler.production.jsonc
         env:
-          SRN_D1_NAME: ${{ secrets.SRN_D1_NAME }}
-          SRN_D1_ID: ${{ secrets.SRN_D1_ID }}
-          SRN_R2_NAME: ${{ secrets.SRN_R2_NAME }}
-          SRN_BACKUP_R2_NAME: ${{ secrets.SRN_BACKUP_R2_NAME }}
           SRN_PUBKEY_WHITELIST: ${{ vars.SRN_PUBKEY_WHITELIST }}
           SRN_POW_DIFFICULTY: ${{ vars.SRN_POW_DIFFICULTY || '0' }}
 
@@ -371,7 +394,6 @@ EOF
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          SRN_BACKUP_R2_NAME: ${{ secrets.SRN_BACKUP_R2_NAME }}
           RELAY_PUBLIC_KEY: ${{ secrets.RELAY_PUBLIC_KEY }}
           WRANGLER_NON_INTERACTIVE: "true"
         run: |
@@ -382,7 +404,6 @@ EOF
             --var RELAY_PUBLIC_KEY:"$RELAY_PUBLIC_KEY")
           echo "$DEPLOY_OUTPUT"
 
-          # Record deployed SHA and URL in R2 for use by the next pre-deploy step
           echo -n "$SHORT_SHA" > /tmp/deployed_sha.txt
           wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt
 
@@ -417,26 +438,20 @@ EOF
 
   # -------------------------------------------------------------------------
   # Emergency restore: fires if ANY of the three deploy phases fail.
-  #
-  # Two-tier response based on which phase failed:
-  #
-  #   deploy-or-bootstrap OR run-data-migrations failed
-  #     → Database may have been modified (schema migration, data backfill).
-  #     → Restore D1 from the pre-deployment backup stored in R2.
-  #     → Redeploy the previously-live code version (SHA embedded in backup name).
-  #
-  #   finalize-deploy failed only
-  #     → Database is clean (no changes in this phase).
-  #     → Disable maintenance mode; last-known-good worker becomes live again.
   # -------------------------------------------------------------------------
   emergency-restore:
-    needs: [deploy-or-bootstrap, run-data-migrations, finalize-deploy]
+    needs: [resolve-infra, deploy-or-bootstrap, run-data-migrations, finalize-deploy]
     if: |
       failure() &&
       needs.deploy-or-bootstrap.outputs.mode == 'deploy' &&
       needs.deploy-or-bootstrap.outputs.skip != 'true'
     runs-on: ubuntu-latest
     name: Emergency Restore
+    env:
+      SRN_D1_NAME:        ${{ needs.resolve-infra.outputs.d1_name }}
+      SRN_D1_ID:          ${{ needs.resolve-infra.outputs.d1_id }}
+      SRN_R2_NAME:        ${{ needs.resolve-infra.outputs.r2_name }}
+      SRN_BACKUP_R2_NAME: ${{ needs.resolve-infra.outputs.backup_r2_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -459,7 +474,6 @@ EOF
           SRN_POW_SECRET=$(openssl rand -hex 16) \
             .github/workflows/scripts/generate_wrangler_config.sh worker/wrangler.production.jsonc
 
-          # Determine whether DB was touched (schema or data migration ran)
           DOB_FAILED="${{ needs.deploy-or-bootstrap.result == 'failure' }}"
           DM_FAILED="${{ needs.run-data-migrations.result == 'failure' }}"
           if [ "$DOB_FAILED" = "true" ] || [ "$DM_FAILED" = "true" ]; then
@@ -468,10 +482,6 @@ EOF
             echo "db_touched=false" >> $GITHUB_OUTPUT
           fi
         env:
-          SRN_D1_NAME: ${{ secrets.SRN_D1_NAME }}
-          SRN_D1_ID: ${{ secrets.SRN_D1_ID }}
-          SRN_R2_NAME: ${{ secrets.SRN_R2_NAME }}
-          SRN_BACKUP_R2_NAME: ${{ secrets.SRN_BACKUP_R2_NAME }}
           SRN_PUBKEY_WHITELIST: ${{ vars.SRN_PUBKEY_WHITELIST }}
           SRN_POW_DIFFICULTY: ${{ vars.SRN_POW_DIFFICULTY || '0' }}
           WRANGLER_NON_INTERACTIVE: "true"
@@ -500,12 +510,12 @@ EOF
             echo "::notice::Using local artifact for restore: $BACKUP_FILE"
           else
             echo "::warning::Artifact unavailable — fetching backup from R2: $BACKUP_FILE"
-            npx wrangler r2 object get "${{ secrets.SRN_BACKUP_R2_NAME }}/$BACKUP_FILE" \
+            npx wrangler r2 object get "$SRN_BACKUP_R2_NAME/$BACKUP_FILE" \
               --file "$BACKUP_FILE" --remote --config wrangler.production.jsonc
           fi
 
           echo "::warning::Restoring D1 from backup: $BACKUP_FILE"
-          npx wrangler d1 execute ${{ secrets.SRN_D1_NAME }} \
+          npx wrangler d1 execute "$SRN_D1_NAME" \
             --remote --file="$BACKUP_FILE" --yes --config wrangler.production.jsonc
           echo "::notice::D1 database restored from $BACKUP_FILE"
 
@@ -514,11 +524,9 @@ EOF
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          SRN_BACKUP_R2_NAME: ${{ secrets.SRN_BACKUP_R2_NAME }}
           WRANGLER_NON_INTERACTIVE: "true"
         run: |
           BACKUP_FILE="${{ needs.deploy-or-bootstrap.outputs.backup_file }}"
-          # Backup name format: backup-YYYYMMDD-HHMMSS-<short_sha>.sql
           PREV_SHA=$(echo "$BACKUP_FILE" | grep -oE "[a-f0-9]{7}" | tail -n 1)
           if [ -z "$PREV_SHA" ]; then
             echo "::error::Could not extract SHA from backup filename '$BACKUP_FILE'. Falling back to maintenance-off deploy."

@@ -11,13 +11,18 @@ name: Run Pending Data Migrations
 
 on:
   workflow_call:
+    inputs:
+      d1_id:
+        description: 'D1 database ID — passed by deploy.yml; leave empty for manual runs'
+        type: string
+        required: false
+        default: ''
   workflow_dispatch:
 
 jobs:
   migrate:
     runs-on: ubuntu-latest
     name: Run Data Migrations
-    # No contents:write needed — no more git commits from this workflow
 
     steps:
       - name: Checkout
@@ -28,9 +33,33 @@ jobs:
         with:
           node-version: 20
 
+      # When triggered manually (workflow_dispatch), d1_id is not passed in,
+      # so we resolve it from Terraform state here.
+      - name: Setup Terraform (manual dispatch only)
+        if: inputs.d1_id == ''
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.5"
+          terraform_wrapper: false
+
+      - name: Resolve D1 ID from Terraform (manual dispatch only)
+        id: resolve
+        if: inputs.d1_id == ''
+        working-directory: infra/terraform
+        run: |
+          terraform init \
+            -backend-config="endpoint=https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com" \
+            -backend-config="access_key=${{ secrets.TF_R2_ACCESS_KEY_ID }}" \
+            -backend-config="secret_key=${{ secrets.TF_R2_SECRET_ACCESS_KEY }}"
+          RAW=$(terraform output -json)
+          echo "d1_id=$(echo "$RAW" | jq -r '.production_d1_id.value')" >> $GITHUB_OUTPUT
+        env:
+          TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
       - name: Run pending data migrations
         run: node worker/data-migrations/run.mjs
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          SRN_D1_ID: ${{ secrets.SRN_D1_ID }}
+          SRN_D1_ID: ${{ inputs.d1_id != '' && inputs.d1_id || steps.resolve.outputs.d1_id }}

@@ -39,4 +39,3 @@ variable "preview_r2_name" {
   type        = string
   default     = "srn-assets-preview"
 }
-

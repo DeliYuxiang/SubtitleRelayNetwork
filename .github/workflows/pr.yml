@@ -106,7 +106,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr comment ${{ github.event.pull_request.number }} \
-            --body "Preview deployed: ${{ steps.deploy.outputs.preview_url }}
-
-Worker: \`srn-worker-preview\` | Commit: \`$(git rev-parse --short HEAD)\`"
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          PREVIEW_URL="${{ steps.deploy.outputs.preview_url }}"
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --body "$(printf 'Preview deployed: %s\n\nWorker: `srn-worker-preview` | Commit: `%s`' "$PREVIEW_URL" "$SHORT_SHA")"

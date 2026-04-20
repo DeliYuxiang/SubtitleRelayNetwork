@@ -284,37 +284,37 @@ jobs:
 
           printf '%s' "$NEW_RELAY_PRIVKEY" | npx wrangler secret put RELAY_PRIVATE_KEY
 
-          cat > PROVISION_INFO.md << EOF
-# Infrastructure Provisioned
-
-Resources created by bootstrap on branch \`$BRANCH_NAME\`.
-
-## Step 1: Add GitHub Secrets (keypair only)
-
-| Secret | Where to find the value |
-|--------|-------------------------|
-| RELAY_PUBLIC_KEY  | See CI notice output for this run |
-| RELAY_PRIVATE_KEY | See CI notice output for this run |
-
-## Step 2: Import resources into Terraform state
-
-Run these commands locally (replace ACCOUNT_ID with your Cloudflare account ID):
-
-\`\`\`bash
-cd infra/terraform
-terraform init ...   # see terraform.yml for backend-config flags
-terraform import cloudflare_d1_database.production        ACCOUNT_ID/$D1_ID
-terraform import cloudflare_r2_bucket.production_assets   ACCOUNT_ID/$R2_NAME
-terraform import cloudflare_r2_bucket.production_backup   ACCOUNT_ID/$BACKUP_R2_NAME
-\`\`\`
-
-Also set these GitHub Actions Variables (not Secrets) to match the provisioned names:
-- TF_PRODUCTION_D1_NAME = $DB_NAME
-- TF_PRODUCTION_R2_NAME = $R2_NAME
-- TF_PRODUCTION_BACKUP_R2_NAME = $BACKUP_R2_NAME
-
-Delete this file after completing both steps.
-EOF
+          {
+            echo "# Infrastructure Provisioned"
+            echo ""
+            echo "Resources created by bootstrap on branch \`$BRANCH_NAME\`."
+            echo ""
+            echo "## Step 1: Add GitHub Secrets (keypair only)"
+            echo ""
+            echo "| Secret | Where to find the value |"
+            echo "|--------|-------------------------|"
+            echo "| RELAY_PUBLIC_KEY  | See CI notice output for this run |"
+            echo "| RELAY_PRIVATE_KEY | See CI notice output for this run |"
+            echo ""
+            echo "## Step 2: Import resources into Terraform state"
+            echo ""
+            echo "Run these commands locally (replace ACCOUNT_ID with your Cloudflare account ID):"
+            echo ""
+            echo '```bash'
+            echo "cd infra/terraform"
+            echo "terraform init ...   # see terraform.yml for backend-config flags"
+            echo "terraform import cloudflare_d1_database.production        ACCOUNT_ID/$D1_ID"
+            echo "terraform import cloudflare_r2_bucket.production_assets   ACCOUNT_ID/$R2_NAME"
+            echo "terraform import cloudflare_r2_bucket.production_backup   ACCOUNT_ID/$BACKUP_R2_NAME"
+            echo '```'
+            echo ""
+            echo "Also set these GitHub Actions Variables (not Secrets) to match the provisioned names:"
+            echo "- TF_PRODUCTION_D1_NAME = $DB_NAME"
+            echo "- TF_PRODUCTION_R2_NAME = $R2_NAME"
+            echo "- TF_PRODUCTION_BACKUP_R2_NAME = $BACKUP_R2_NAME"
+            echo ""
+            echo "Delete this file after completing both steps."
+          } > PROVISION_INFO.md
 
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"

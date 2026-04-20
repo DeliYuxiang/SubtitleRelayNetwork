@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { Bindings } from "../types";
+import { Bindings, ChallengeSchema } from "../types";
 import { getPoWSalt, isVip } from "../lib/verify-pubkey";
 
 const challenge = new OpenAPIHono<{ Bindings: Bindings }>();
@@ -24,13 +24,7 @@ challenge.openapi(
         description: "Challenge parameters",
         content: {
           "application/json": {
-            schema: z.object({
-              salt: z.string().describe("Hex salt tied to IP and time"),
-              k: z
-                .number()
-                .int()
-                .min(0)
-                .describe("Number of leading zero hex chars required"),
+            schema: ChallengeSchema.extend({
               vip: z.boolean().describe("Whether the client is a VIP"),
             }),
           },

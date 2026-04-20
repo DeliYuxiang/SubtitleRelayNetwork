@@ -1,6 +1,31 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { Bindings } from "../types";
+import { Bindings, ErrorSchema } from "../types";
 import { verifySignedRequest } from "../lib/verify-pubkey";
+
+const TmdbResultSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  title: z.string(),
+  poster_path: z.string().nullable(),
+  media_type: z.enum(["movie", "tv"]),
+  release_date: z.string(),
+  first_air_date: z.string(),
+});
+
+const tmdbErrorResponses = {
+  401: {
+    description: "Signature verification failed",
+    content: { "application/json": { schema: ErrorSchema } },
+  },
+  403: {
+    description: "PoW verification failed",
+    content: { "application/json": { schema: ErrorSchema } },
+  },
+  429: {
+    description: "Rate limited",
+    content: { "application/json": { schema: ErrorSchema } },
+  },
+} as const;
 
 const tmdb = new OpenAPIHono<{ Bindings: Bindings }>();
 
@@ -31,12 +56,11 @@ tmdb.openapi(
         description: "Search results",
         content: {
           "application/json": {
-            schema: z.object({ results: z.array(z.any()) }),
+            schema: z.object({ results: z.array(TmdbResultSchema) }),
           },
         },
       },
-      401: { description: "Unauthorized" },
-      403: { description: "PoW verification failed" },
+      ...tmdbErrorResponses,
     },
   }),
   async (c) => {
@@ -103,7 +127,14 @@ tmdb.openapi(
     );
 
     const data: any = await response.json();
-    const results = (data.results || [])
+    if (!response.ok || !Array.isArray(data.results)) {
+      console.error(
+        `TMDB API error: HTTP ${response.status}`,
+        JSON.stringify(data),
+      );
+      return c.json({ error: "TMDB upstream error" }, 502);
+    }
+    const results = (data.results as any[])
       .filter((r: any) => r.media_type === "movie" || r.media_type === "tv")
       .map((r: any) => ({
         id: r.id,
@@ -117,22 +148,24 @@ tmdb.openapi(
 
     // Cache write: upsert each title into permanent knowledge base
     const now = Math.floor(Date.now() / 1000);
-    c.executionCtx.waitUntil(
-      c.env.DB.batch(
-        results.map((r: any) =>
-          c.env.DB.prepare(
-            "INSERT OR REPLACE INTO tmdb_title_cache (tmdb_id, name, type, year, poster, cached_at) VALUES (?, ?, ?, ?, ?, ?)",
-          ).bind(
-            r.id,
-            r.name,
-            r.media_type,
-            r.release_date.split("-")[0],
-            r.poster_path ?? "",
-            now,
+    if (results.length > 0) {
+      c.executionCtx.waitUntil(
+        c.env.DB.batch(
+          results.map((r: any) =>
+            c.env.DB.prepare(
+              "INSERT OR REPLACE INTO tmdb_title_cache (tmdb_id, name, type, year, poster, cached_at) VALUES (?, ?, ?, ?, ?, ?)",
+            ).bind(
+              r.id,
+              r.name,
+              r.media_type,
+              r.release_date.split("-")[0],
+              r.poster_path ?? "",
+              now,
+            ),
           ),
         ),
-      ),
-    );
+      );
+    }
 
     return c.json({ results });
   },
@@ -156,12 +189,13 @@ tmdb.openapi(
         description: "Season info",
         content: {
           "application/json": {
-            schema: z.object({ episode_count: z.number() }),
+            schema: z.object({
+              episode_count: z.number().int().min(0),
+            }),
           },
         },
       },
-      401: { description: "Unauthorized" },
-      403: { description: "PoW verification failed" },
+      ...tmdbErrorResponses,
     },
   }),
   async (c) => {
@@ -203,7 +237,7 @@ tmdb.openapi(
 
     if (episodeCount > 0) {
       await c.env.DB.prepare(
-        "INSERT OR REPLACE INTO tmdb_season_cache (tmdb_id, season_num, episode_count, created_at) VALUES (?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO tmdb_season_cache (tmdb_id, season_num, episode_count, cached_at) VALUES (?, ?, ?, ?)",
       )
         .bind(
           tmdbId,

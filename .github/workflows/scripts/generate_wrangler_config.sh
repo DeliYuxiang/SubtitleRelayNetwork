@@ -52,6 +52,7 @@ fi
 PUBKEY_WHITELIST="${SRN_PUBKEY_WHITELIST:-}"
 POW_DIFFICULTY="${SRN_POW_DIFFICULTY:-0}"
 POW_SECRET="${SRN_POW_SECRET:?SRN_POW_SECRET is required}"
+CORS_ORIGINS="${CORS_ORIGINS:-}"
 
 cat > "$OUTPUT" << EOF
 {
@@ -76,7 +77,8 @@ cat > "$OUTPUT" << EOF
   "vars": {
     "SRN_PUBKEY_WHITELIST": "${PUBKEY_WHITELIST}",
     "SRN_POW_DIFFICULTY":   "${POW_DIFFICULTY}",
-    "SRN_POW_SECRET":       "${POW_SECRET}"
+    "SRN_POW_SECRET":       "${POW_SECRET}",
+    "CORS_ORIGINS":         "${CORS_ORIGINS}"
   },
   "unsafe": {
     "bindings": [

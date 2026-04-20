@@ -47,3 +47,6 @@ go.mod
 /bbs.md
 /.wrangler
 infra/terraform/terraform
+
+# Frontend moved to separate srnfrontend repository
+/frontend/

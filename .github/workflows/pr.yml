@@ -74,6 +74,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate required secrets
+        env:
+          RELAY_PUBLIC_KEY: ${{ secrets.RELAY_PUBLIC_KEY }}
+          TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
+        run: |
+          MISSING=()
+          [ -z "$CLOUDFLARE_API_TOKEN"  ] && MISSING+=("CLOUDFLARE_API_TOKEN")
+          [ -z "$CLOUDFLARE_ACCOUNT_ID" ] && MISSING+=("CLOUDFLARE_ACCOUNT_ID")
+          [ -z "$RELAY_PUBLIC_KEY"      ] && MISSING+=("RELAY_PUBLIC_KEY")
+          [ -z "$TMDB_TOKEN"            ] && MISSING+=("TMDB_TOKEN")
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "::error::Missing required secrets: ${MISSING[*]}"
+            exit 1
+          fi
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -82,8 +97,15 @@ jobs:
       - name: Install dependencies
         run: cd worker && npm ci
 
+      - name: Detect migration changes
+        id: detect_migrations
+        run: |
+          git fetch origin ${{ github.base_ref }} --depth=1
+          CHANGED=$(git diff --name-only origin/${{ github.base_ref }} HEAD -- worker/migrations/ | wc -l)
+          echo "has_migrations=$([ "$CHANGED" -gt 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
+
       - name: Seed preview D1 from production
-        if: needs.resolve-prod-infra.outputs.infra_exists == 'true'
+        if: steps.detect_migrations.outputs.has_migrations == 'true' && needs.resolve-prod-infra.outputs.infra_exists == 'true'
         run: |
           cd worker
 
@@ -98,7 +120,7 @@ jobs:
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             -H "Content-Type: application/json" \
             -d '{"sql":"SELECT name FROM sqlite_master WHERE type=\u0027table\u0027 AND name NOT LIKE \u0027sqlite_%\u0027","params":[]}')
-          TABLES=$(echo "$QUERY_OUT" | jq -r '.result[0].results[].name | select(startswith("_cf_") | not)')
+          TABLES=$(echo "$QUERY_OUT" | jq -r '(.result[0].results // [])[] | .name | select(startswith("_cf_") | not)')
           if [ -n "$TABLES" ]; then
             {
               echo "PRAGMA foreign_keys=OFF;"
@@ -121,6 +143,9 @@ jobs:
           SRN_PREVIEW_D1_NAME: ${{ needs.resolve-infra.outputs.d1_name }}
           SRN_PREVIEW_D1_ID: ${{ needs.resolve-infra.outputs.d1_id }}
           SRN_PREVIEW_R2_NAME: ${{ needs.resolve-infra.outputs.r2_name }}
+          SRN_PUBKEY_WHITELIST: ${{ vars.SRN_PUBKEY_WHITELIST }}
+          SRN_POW_DIFFICULTY: ${{ vars.SRN_POW_DIFFICULTY || '0' }}
+          CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
 
       - name: Apply preview schema migrations
         run: |
@@ -129,6 +154,7 @@ jobs:
             --remote --config wrangler.preview.jsonc
 
       - name: Run pending data migrations
+        if: steps.detect_migrations.outputs.has_migrations == 'true'
         run: node worker/data-migrations/run.mjs
         env:
           SRN_D1_ID: ${{ needs.resolve-infra.outputs.d1_id }}
@@ -147,6 +173,16 @@ jobs:
 
           PREVIEW_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE "https://[a-zA-Z0-9.-]+\.workers\.dev" | head -n 1)
           echo "preview_url=${PREVIEW_URL}" >> $GITHUB_OUTPUT
+
+      - name: Inject preview secrets
+        env:
+          TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
+        run: |
+          cd worker
+          if [ -n "$TMDB_TOKEN" ]; then
+            printf '%s' "$TMDB_TOKEN" | npx wrangler secret put TMDB_TOKEN \
+              --config wrangler.preview.jsonc
+          fi
 
       - name: Post preview URL to PR
         if: steps.deploy.outputs.preview_url != ''

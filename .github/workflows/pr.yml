@@ -130,7 +130,6 @@ jobs:
           SRN_PREVIEW_R2_NAME: ${{ needs.resolve-infra.outputs.r2_name }}
 
       - name: Apply preview schema migrations
-        if: steps.detect_migrations.outputs.has_migrations == 'true'
         run: |
           cd worker
           npx wrangler d1 migrations apply "$PREVIEW_D1_NAME" \

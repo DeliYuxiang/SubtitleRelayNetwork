@@ -56,9 +56,18 @@ jobs:
           echo "::warning::Step 1: RESTORING DATABASE..."
 
           # Dynamically drop all user tables by querying sqlite_master
-          TABLES=$(wrangler d1 execute ${{ secrets.SRN_D1_NAME }} --remote \
+          QUERY_OUT=$(wrangler d1 execute ${{ secrets.SRN_D1_NAME }} --remote \
             --command "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'" \
-            --json | jq -r '.[0].results[].name')
+            --json 2>&1)
+          echo "sqlite_master query output: $QUERY_OUT"
+
+          TABLES=$(echo "$QUERY_OUT" | python3 .github/workflows/scripts/parse_table_names.py)
+
+          if [ -z "$TABLES" ]; then
+            echo "::error::Failed to enumerate tables from sqlite_master — aborting restore"
+            exit 1
+          fi
+          echo "Tables to drop: $TABLES"
 
           {
             echo "PRAGMA foreign_keys=OFF;"
@@ -66,6 +75,7 @@ jobs:
             echo "PRAGMA foreign_keys=ON;"
           } > /tmp/reset_db.sql
 
+          cat /tmp/reset_db.sql
           wrangler d1 execute ${{ secrets.SRN_D1_NAME }} --remote --file=/tmp/reset_db.sql --yes
           wrangler d1 execute ${{ secrets.SRN_D1_NAME }} --remote --file=rollback.sql --yes
           

@@ -55,13 +55,22 @@ jobs:
         run: |
           echo "::warning::Step 1: RESTORING DATABASE..."
 
-          # Dynamically drop all user tables by querying sqlite_master
-          QUERY_OUT=$(wrangler d1 execute ${{ secrets.SRN_D1_NAME }} --remote \
-            --command "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'" \
-            --json 2>&1)
-          echo "sqlite_master query output: $QUERY_OUT"
+          # Query sqlite_master via D1 REST API (clean JSON, no wrangler output mixing)
+          D1_API="https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/d1/database/${{ secrets.SRN_D1_ID }}"
+          QUERY_OUT=$(curl -s "$D1_API/query" \
+            -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"sql":"SELECT name FROM sqlite_master WHERE type=\u0027table\u0027 AND name NOT LIKE \u0027sqlite_%\u0027","params":[]}')
+          echo "sqlite_master response: $QUERY_OUT"
 
-          TABLES=$(echo "$QUERY_OUT" | python3 .github/workflows/scripts/parse_table_names.py)
+          TABLES=$(echo "$QUERY_OUT" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+rows = data.get('result', [{}])[0].get('results', [])
+for r in rows:
+    if not r['name'].startswith('_cf_'):
+        print(r['name'])
+")
 
           if [ -z "$TABLES" ]; then
             echo "::error::Failed to enumerate tables from sqlite_master — aborting restore"

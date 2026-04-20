@@ -26,7 +26,7 @@ script: |
 
   const BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/d1/database/${DB_ID}`;
   const BATCH_SIZE  = 500; // rows fetched per SELECT
-  const WRITE_BATCH = 100; // rows per CASE UPDATE (3 params/row → 300 params, under SQLite's 999 limit)
+  const WRITE_BATCH = 33;  // rows per CASE UPDATE (3 params/row → 99 params, under D1's 100-variable limit)
 
   async function d1(sql, params = []) {
     const res = await fetch(`${BASE}/query`, {

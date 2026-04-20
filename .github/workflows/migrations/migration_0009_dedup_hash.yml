@@ -25,20 +25,36 @@ script: |
   }
 
   const BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/d1/database/${DB_ID}`;
-  const BATCH_SIZE = 50;
+  const BATCH_SIZE  = 500; // rows fetched per SELECT
+  const WRITE_BATCH = 100; // max statements per /batch API call (D1 limit)
 
   async function d1(sql, params = []) {
     const res = await fetch(`${BASE}/query`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${API_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Authorization': `Bearer ${API_TOKEN}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ sql, params }),
     });
     const data = await res.json();
     if (!data.success) throw new Error(`D1 error: ${JSON.stringify(data.errors)}`);
     return data.result[0];
+  }
+
+  // Send multiple SQL statements in one HTTP round-trip
+  async function d1batch(queries) {
+    const res = await fetch(`${BASE}/batch`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${API_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ queries }),
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(`D1 batch error: ${JSON.stringify(data.errors)}`);
+    return data.result; // array of { results, meta } — one per query
+  }
+
+  function chunk(arr, size) {
+    const out = [];
+    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+    return out;
   }
 
   function makeDedupHash(pubkey, contentMd5, tmdbId, seasonNum, episodeNum, language, archiveMd5) {
@@ -68,34 +84,43 @@ script: |
         LIMIT ?
       `, [BATCH_SIZE]);
 
-      if (!results || results.length === 0) break;
+      if (!results?.length) break;
 
-      for (const row of results) {
-        const hash = makeDedupHash(
-          row.pubkey, row.content_md5, row.tmdb_id,
-          row.season_num, row.episode_num, row.language, row.archive_md5,
-        );
+      // Compute all hashes locally (no I/O)
+      const rows = results.map(row => ({
+        event_id: row.event_id,
+        hash: makeDedupHash(row.pubkey, row.content_md5, row.tmdb_id,
+                            row.season_num, row.episode_num, row.language, row.archive_md5),
+      }));
 
-        // UPDATE OR IGNORE: silently skips if dedup_hash already exists (UNIQUE conflict)
-        const { meta } = await d1(
-          'UPDATE OR IGNORE event_metadata SET dedup_hash = ? WHERE event_id = ? AND dedup_hash IS NULL',
-          [hash, row.event_id],
-        );
-
-        if (meta.changes > 0) {
-          updated++;
-        } else {
-          // UNIQUE conflict → semantic duplicate; discard from metadata so it
-          // no longer appears in search results (events row left as inert orphan).
-          await d1(
-            'DELETE FROM event_metadata WHERE event_id = ? AND dedup_hash IS NULL',
-            [row.event_id],
-          );
-          removed++;
-          console.log(`Discarded duplicate event: ${row.event_id}`);
-        }
+      // Batch all UPDATEs — one HTTP call per 100 rows instead of one per row
+      const updateQueries = rows.map(({ event_id, hash }) => ({
+        sql: 'UPDATE OR IGNORE event_metadata SET dedup_hash = ? WHERE event_id = ? AND dedup_hash IS NULL',
+        params: [hash, event_id],
+      }));
+      const updateResults = [];
+      for (const batch of chunk(updateQueries, WRITE_BATCH)) {
+        updateResults.push(...await d1batch(batch));
       }
 
+      // Collect duplicates (UPDATE returned 0 changes = UNIQUE conflict)
+      const duplicateIds = rows
+        .filter((_, i) => updateResults[i].meta.changes === 0)
+        .map(r => r.event_id);
+
+      if (duplicateIds.length > 0) {
+        const deleteQueries = duplicateIds.map(id => ({
+          sql: 'DELETE FROM event_metadata WHERE event_id = ? AND dedup_hash IS NULL',
+          params: [id],
+        }));
+        for (const batch of chunk(deleteQueries, WRITE_BATCH)) {
+          await d1batch(batch);
+        }
+        duplicateIds.forEach(id => console.log(`Discarded duplicate event: ${id}`));
+      }
+
+      updated += rows.length - duplicateIds.length;
+      removed += duplicateIds.length;
       console.log(`Progress: updated=${updated}, removed=${removed}`);
     }
 

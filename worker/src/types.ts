@@ -1,4 +1,5 @@
 import { z } from "@hono/zod-openapi";
+import { version } from "../package.json";
 
 export interface RateLimit {
   limit(options: { key: string }): Promise<{ success: boolean }>;
@@ -53,4 +54,4 @@ export type Bindings = {
   FRONTEND_URL?: string;
 };
 
-export const RELAY_VERSION = "3.0.0";
+export const RELAY_VERSION = version;

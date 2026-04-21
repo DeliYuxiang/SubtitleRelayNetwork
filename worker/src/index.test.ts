@@ -39,8 +39,8 @@ describe("SRN Worker Integration Tests", () => {
     `);
   });
 
-  it("should return JSON relay info on root", async () => {
-    const request = new Request("http://example.com/");
+  it("should return JSON relay info on /v1/relay", async () => {
+    const request = new Request("http://example.com/v1/relay");
     const ctx = createExecutionContext();
     const response = await worker.fetch(request, env, ctx);
     await waitOnExecutionContext(ctx);

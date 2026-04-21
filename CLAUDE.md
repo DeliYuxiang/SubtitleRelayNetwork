@@ -39,8 +39,10 @@ The worker (`worker/src/index.ts`) is a Hono + Zod OpenAPI server running on Clo
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/` | Landing page SPA (Petite-Vue, `worker/src/ui.ts`) |
+| GET | `/` | Proxied to frontend CDN (`FRONTEND_URL`) — worker is the single entry point |
+| GET | `/v1/relay` | Relay metadata + event count (JSON) |
 | GET | `/v1/health` | Shields.io status badge |
+| GET | `/v1/identity` | Relay pubkey, version, commit |
 | POST | `/v1/events` | Publish event — verifies Ed25519 signature, deduplicates via MD5, uploads to R2, inserts to D1 |
 | GET | `/v1/events` | Search by `?tmdb=&season=&ep=&language=` |
 | GET | `/v1/events/:id/content` | Download subtitle (streams from R2, gzip transparent) |

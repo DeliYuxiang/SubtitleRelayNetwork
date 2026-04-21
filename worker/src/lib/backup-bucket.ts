@@ -11,14 +11,16 @@ export class BackupBucket {
   ) {
     const { B2_KEY_ID, B2_APP_KEY, B2_ENDPOINT, B2_BUCKET_NAME, B2_REGION } =
       env;
-    if (B2_KEY_ID && B2_APP_KEY && B2_ENDPOINT && B2_BUCKET_NAME) {
+    const endpoint = B2_ENDPOINT?.trim();
+    const bucket = B2_BUCKET_NAME?.trim();
+    if (B2_KEY_ID?.trim() && B2_APP_KEY?.trim() && endpoint && bucket) {
       this.client = new AwsClient({
-        accessKeyId: B2_KEY_ID,
-        secretAccessKey: B2_APP_KEY,
+        accessKeyId: B2_KEY_ID.trim(),
+        secretAccessKey: B2_APP_KEY.trim(),
         service: "s3",
-        region: B2_REGION ?? "us-west-004",
+        region: (B2_REGION ?? "us-west-004").trim(),
       });
-      this.baseUrl = `${B2_ENDPOINT}/${B2_BUCKET_NAME}`;
+      this.baseUrl = `${endpoint}/${bucket}`;
     }
   }
 

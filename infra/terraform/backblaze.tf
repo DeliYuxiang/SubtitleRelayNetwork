@@ -23,3 +23,7 @@ output "b2_worker_app_key" {
 output "b2_bucket_name" {
   value = b2_bucket.backup.bucket_name
 }
+
+output "b2_endpoint" {
+  value = "https://s3.${var.b2_region}.backblazeb2.com"
+}

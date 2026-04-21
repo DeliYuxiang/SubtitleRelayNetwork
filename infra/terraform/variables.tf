@@ -45,3 +45,8 @@ variable "b2_bucket_name" {
   type        = string
   default     = "srn-backup-prod"
 }
+
+variable "b2_region" {
+  description = "Backblaze B2 region for the backup bucket (e.g. us-west-004, eu-central-003). Set as GitHub Variable TF_B2_REGION."
+  type        = string
+}

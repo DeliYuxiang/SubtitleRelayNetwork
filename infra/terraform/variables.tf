@@ -45,3 +45,4 @@ variable "b2_bucket_name" {
   type        = string
   default     = "srn-backup-prod"
 }
+

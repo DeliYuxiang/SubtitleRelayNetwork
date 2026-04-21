@@ -116,14 +116,14 @@ jobs:
           TF_VAR_b2_bucket_name: ${{ vars.TF_B2_BUCKET_NAME || 'srn-backup-prod' }}
           B2_APPLICATION_KEY_ID: ${{ secrets.B2_MASTER_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_MASTER_APP_KEY }}
-          B2_REGION: ${{ vars.B2_REGION || 'us-west-004' }}
           WRANGLER_NON_INTERACTIVE: "true"
         run: |
           B2_KEY_ID=$(terraform output -raw b2_worker_key_id 2>/dev/null || echo "")
           B2_APP_KEY=$(terraform output -raw b2_worker_app_key 2>/dev/null || echo "")
           B2_BUCKET=$(terraform output -raw b2_bucket_name 2>/dev/null || echo "")
+          B2_ENDPOINT=$(terraform output -raw b2_endpoint 2>/dev/null || echo "")
 
-          if [ -z "$B2_KEY_ID" ] || [ -z "$B2_APP_KEY" ]; then
+          if [ -z "$B2_KEY_ID" ] || [ -z "$B2_APP_KEY" ] || [ -z "$B2_ENDPOINT" ]; then
             echo "::notice::B2 outputs not available — skipping Worker secret push"
             exit 0
           fi
@@ -135,10 +135,10 @@ jobs:
           cd "$GITHUB_WORKSPACE/worker"
           npm ci --silent
 
-          printf '%s' "$B2_KEY_ID"                                    | npx wrangler secret put B2_KEY_ID
-          printf '%s' "$B2_APP_KEY"                                   | npx wrangler secret put B2_APP_KEY
-          printf '%s' "https://s3.${B2_REGION}.backblazeb2.com"      | npx wrangler secret put B2_ENDPOINT
-          printf '%s' "$B2_BUCKET"                                    | npx wrangler secret put B2_BUCKET_NAME
+          printf '%s' "$B2_KEY_ID"   | npx wrangler secret put B2_KEY_ID
+          printf '%s' "$B2_APP_KEY"  | npx wrangler secret put B2_APP_KEY
+          printf '%s' "$B2_ENDPOINT" | npx wrangler secret put B2_ENDPOINT
+          printf '%s' "$B2_BUCKET"   | npx wrangler secret put B2_BUCKET_NAME
 
           echo "::notice::B2 worker secrets pushed to Cloudflare Worker"
 

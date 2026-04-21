@@ -59,12 +59,25 @@ export class BackupBucket {
       headers: { "Content-Type": contentType, "Content-Encoding": "gzip" },
     });
     if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    await this.env.DB.prepare(
+      "UPDATE blobs SET b2_synced_at = ? WHERE r2_key = ?",
+    )
+      .bind(Math.floor(Date.now() / 1000), key)
+      .run();
   }
 
   private async _head(key: string): Promise<boolean> {
     const res = await this.client!.fetch(`${this.baseUrl}/${key}`, {
       method: "HEAD",
     });
+    // B2 confirms it has this blob: stamp D1 if not yet recorded.
+    if (res.ok) {
+      await this.env.DB.prepare(
+        "UPDATE blobs SET b2_synced_at = ? WHERE r2_key = ? AND b2_synced_at IS NULL",
+      )
+        .bind(Math.floor(Date.now() / 1000), key)
+        .run();
+    }
     return res.ok;
   }
 }

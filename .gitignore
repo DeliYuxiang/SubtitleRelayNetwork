@@ -50,3 +50,4 @@ infra/terraform/terraform
 
 # Frontend moved to separate srnfrontend repository
 /frontend/
+/.claude

@@ -144,6 +144,7 @@ jobs:
           SRN_PUBKEY_WHITELIST: ${{ vars.SRN_PUBKEY_WHITELIST }}
           SRN_POW_DIFFICULTY: ${{ vars.SRN_POW_DIFFICULTY || '0' }}
           CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
+          FRONTEND_URL: ${{ secrets.FRONTEND_URL }}
 
       - name: Apply preview schema migrations
         run: |

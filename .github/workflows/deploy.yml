@@ -143,6 +143,7 @@ jobs:
           SRN_PUBKEY_WHITELIST: ${{ vars.SRN_PUBKEY_WHITELIST }}
           SRN_POW_DIFFICULTY: ${{ vars.SRN_POW_DIFFICULTY || '0' }}
           CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
+          FRONTEND_URL: ${{ secrets.FRONTEND_URL }}
           WRANGLER_NON_INTERACTIVE: "true"
 
       - name: Upload Secrets & Configure Lifecycle Rules
@@ -405,6 +406,7 @@ jobs:
           SRN_PUBKEY_WHITELIST: ${{ vars.SRN_PUBKEY_WHITELIST }}
           SRN_POW_DIFFICULTY: ${{ vars.SRN_POW_DIFFICULTY || '0' }}
           CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
+          FRONTEND_URL: ${{ secrets.FRONTEND_URL }}
 
       - name: Deploy Worker
         id: worker_deploy
@@ -486,6 +488,7 @@ jobs:
           SRN_PUBKEY_WHITELIST: ${{ vars.SRN_PUBKEY_WHITELIST }}
           SRN_POW_DIFFICULTY: ${{ vars.SRN_POW_DIFFICULTY || '0' }}
           CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
+          FRONTEND_URL: ${{ secrets.FRONTEND_URL }}
           WRANGLER_NON_INTERACTIVE: "true"
 
       # --- Path A: DB was touched → restore from backup + rollback code ---

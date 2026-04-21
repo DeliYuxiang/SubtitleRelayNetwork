@@ -77,4 +77,16 @@ app.doc("/doc", {
 
 app.get("/ui", swaggerUI({ url: "/doc" }));
 
+// Proxy all remaining GET requests to the frontend CDN.
+// CF Pages already sets the right Cache-Control headers:
+//   /assets/*  → immutable, 1 year  (Vite content-hashed filenames)
+//   index.html → no-cache           (browser always revalidates)
+// So frontend updates are picked up automatically without redeploying the worker.
+app.get("*", async (c) => {
+  const frontend = (c.env.FRONTEND_URL ?? "").replace(/\/+$/, "");
+  if (!frontend) return c.text("Frontend not configured", 502);
+  const url = new URL(c.req.url);
+  return fetch(frontend + url.pathname + url.search);
+});
+
 export default app;

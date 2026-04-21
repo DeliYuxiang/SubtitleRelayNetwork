@@ -2,6 +2,10 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { Bindings, ChallengeSchema } from "../types";
 import { getPoWSalt, isVip } from "../lib/verify-pubkey";
 
+const ChallengeResponseSchema = ChallengeSchema.extend({
+  vip: z.boolean().describe("Whether the client is a VIP"),
+}).openapi("ChallengeResponse");
+
 const challenge = new OpenAPIHono<{ Bindings: Bindings }>();
 
 /**
@@ -24,9 +28,7 @@ challenge.openapi(
         description: "Challenge parameters",
         content: {
           "application/json": {
-            schema: ChallengeSchema.extend({
-              vip: z.boolean().describe("Whether the client is a VIP"),
-            }),
+            schema: ChallengeResponseSchema,
           },
         },
       },

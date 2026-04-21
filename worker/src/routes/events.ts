@@ -6,22 +6,24 @@ import {
   isVip,
 } from "../lib/verify-pubkey";
 
-const EventSchema = z.object({
-  id: z.string(),
-  pubkey: z.string(),
-  kind: z.number().int(),
-  content_md5: z.string(),
-  tags: z.string().describe("JSON-encoded tag array"),
-  sig: z.string(),
-  created_at: z.number().int(),
-  tmdb_id: z.string().nullable().optional(),
-  season_num: z.number().int().nullable().optional(),
-  episode_num: z.number().int().nullable().optional(),
-  language: z.string().nullable().optional(),
-  archive_md5: z.string().nullable().optional(),
-  source_type: z.string().nullable().optional(),
-  source_uri: z.string().nullable().optional(),
-});
+const EventSchema = z
+  .object({
+    id: z.string(),
+    pubkey: z.string(),
+    kind: z.number().int(),
+    content_md5: z.string(),
+    tags: z.string().describe("JSON-encoded tag array"),
+    sig: z.string(),
+    created_at: z.number().int(),
+    tmdb_id: z.string().nullable().optional(),
+    season_num: z.number().int().nullable().optional(),
+    episode_num: z.number().int().nullable().optional(),
+    language: z.string().nullable().optional(),
+    archive_md5: z.string().nullable().optional(),
+    source_type: z.string().nullable().optional(),
+    source_uri: z.string().nullable().optional(),
+  })
+  .openapi("SRNEvent");
 
 const errorResponses = {
   401: {
@@ -162,7 +164,7 @@ events.openapi(
 events.openapi(
   createRoute({
     method: "get",
-    path: "/v1/events/:id/content",
+    path: "/v1/events/{id}/content",
     summary: "Download subtitle file",
     request: {
       headers: authHeaders,

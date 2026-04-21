@@ -2,15 +2,17 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { Bindings, ErrorSchema } from "../types";
 import { verifySignedRequest } from "../lib/verify-pubkey";
 
-const TmdbResultSchema = z.object({
-  id: z.number().int(),
-  name: z.string(),
-  title: z.string(),
-  poster_path: z.string().nullable(),
-  media_type: z.enum(["movie", "tv"]),
-  release_date: z.string(),
-  first_air_date: z.string(),
-});
+const TmdbResultSchema = z
+  .object({
+    id: z.number().int(),
+    name: z.string(),
+    title: z.string(),
+    poster_path: z.string().nullable(),
+    media_type: z.enum(["movie", "tv"]),
+    release_date: z.string(),
+    first_air_date: z.string(),
+  })
+  .openapi("TMDBResult");
 
 const tmdbErrorResponses = {
   401: {

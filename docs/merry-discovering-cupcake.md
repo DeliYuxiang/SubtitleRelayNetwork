@@ -322,3 +322,5 @@ CGO_ENABLED=0 go build -o /tmp/hijarr ./cmd/hijarr
 - hijarr 提交前运行 `CGO_ENABLED=0 go run ./tools/coderef > docs/CODEREF.md`
 - 不在 `for` 循环内用 `defer` 释放 `sync.Map` 键
 - Gin 路由不要在 `/*path` 旁注册静态路由
+
+<!-- doc-sha: edefb69835eb9811a2f41aba039736e552aac6e3 -->

@@ -23,6 +23,8 @@ interface RelayInfo {
   totalEvents: number;
   uniqueTitles: number;
   uniqueEpisodes: number;
+  r2BlobCount: number;
+  b2BlobCount: number;
   pubkey: string;
   commit: string;
   description: string;
@@ -32,35 +34,54 @@ async function fetchRelayInfo(env: Bindings): Promise<RelayInfo> {
   let totalEvents = 0;
   let uniqueTitles = 0;
   let uniqueEpisodes = 0;
+  let r2BlobCount = 0;
+  let b2BlobCount = 0;
   try {
     const now = Math.floor(Date.now() / 1000);
 
-    // Three O(1) primary-key reads.
-    const [eventsRow, titlesRow, episodesRow] = await Promise.all([
-      env.DB.prepare(
-        "SELECT value, updated_at FROM relay_stats WHERE key = 'event_count'",
-      ).first<{ value: number; updated_at: number }>(),
-      env.DB.prepare(
-        "SELECT value, updated_at FROM relay_stats WHERE key = 'unique_titles'",
-      ).first<{ value: number; updated_at: number }>(),
-      env.DB.prepare(
-        "SELECT value, updated_at FROM relay_stats WHERE key = 'unique_episodes'",
-      ).first<{ value: number; updated_at: number }>(),
-    ]);
+    // Five O(1) primary-key reads.
+    const [eventsRow, titlesRow, episodesRow, r2BlobsRow, b2BlobsRow] =
+      await Promise.all([
+        env.DB.prepare(
+          "SELECT value, updated_at FROM relay_stats WHERE key = 'event_count'",
+        ).first<{ value: number; updated_at: number }>(),
+        env.DB.prepare(
+          "SELECT value, updated_at FROM relay_stats WHERE key = 'unique_titles'",
+        ).first<{ value: number; updated_at: number }>(),
+        env.DB.prepare(
+          "SELECT value, updated_at FROM relay_stats WHERE key = 'unique_episodes'",
+        ).first<{ value: number; updated_at: number }>(),
+        env.DB.prepare(
+          "SELECT value, updated_at FROM relay_stats WHERE key = 'r2_blob_count'",
+        ).first<{ value: number; updated_at: number }>(),
+        env.DB.prepare(
+          "SELECT value, updated_at FROM relay_stats WHERE key = 'b2_blob_count'",
+        ).first<{ value: number; updated_at: number }>(),
+      ]);
 
     totalEvents = eventsRow?.value ?? 0;
     uniqueTitles = titlesRow?.value ?? 0;
     uniqueEpisodes = episodesRow?.value ?? 0;
+    r2BlobCount = r2BlobsRow?.value ?? 0;
+    b2BlobCount = b2BlobsRow?.value ?? 0;
 
-    // All three counters share the same TTL.  Refresh as a group when the
+    // All five counters share the same TTL.  Refresh as a group when the
     // oldest cached value has expired.
     const oldest = Math.min(
       eventsRow?.updated_at ?? 0,
       titlesRow?.updated_at ?? 0,
       episodesRow?.updated_at ?? 0,
+      r2BlobsRow?.updated_at ?? 0,
+      b2BlobsRow?.updated_at ?? 0,
     );
     if (now - oldest > STATS_TTL_SECONDS) {
-      const [freshEvents, freshTitles, freshEpisodes] = await Promise.all([
+      const [
+        freshEvents,
+        freshTitles,
+        freshEpisodes,
+        freshR2Blobs,
+        freshB2Blobs,
+      ] = await Promise.all([
         env.DB.prepare(
           `SELECT COUNT(*) AS count FROM event_metadata m WHERE ${SUBQUERY}`,
         ).first<{ count: number }>(),
@@ -69,16 +90,24 @@ async function fetchRelayInfo(env: Bindings): Promise<RelayInfo> {
         ).first<{ count: number }>(),
         env.DB.prepare(
           `SELECT COUNT(DISTINCT
-             m.tmdb_id || ':' ||
-             COALESCE(CAST(m.season_num  AS TEXT), '') || ':' ||
-             COALESCE(CAST(m.episode_num AS TEXT), '')) AS count
-           FROM event_metadata m WHERE ${SUBQUERY}`,
+               m.tmdb_id || ':' ||
+               COALESCE(CAST(m.season_num  AS TEXT), '') || ':' ||
+               COALESCE(CAST(m.episode_num AS TEXT), '')) AS count
+             FROM event_metadata m WHERE ${SUBQUERY}`,
+        ).first<{ count: number }>(),
+        env.DB.prepare(
+          "SELECT COUNT(*) AS count FROM blobs WHERE r2_key != 'internal/empty'",
+        ).first<{ count: number }>(),
+        env.DB.prepare(
+          "SELECT COUNT(*) AS count FROM blobs WHERE b2_synced_at IS NOT NULL AND r2_key != 'internal/empty'",
         ).first<{ count: number }>(),
       ]);
 
       totalEvents = freshEvents?.count ?? 0;
       uniqueTitles = freshTitles?.count ?? 0;
       uniqueEpisodes = freshEpisodes?.count ?? 0;
+      r2BlobCount = freshR2Blobs?.count ?? 0;
+      b2BlobCount = freshB2Blobs?.count ?? 0;
 
       const upsert =
         "INSERT INTO relay_stats(key, value, updated_at) VALUES(?, ?, ?)" +
@@ -87,6 +116,8 @@ async function fetchRelayInfo(env: Bindings): Promise<RelayInfo> {
         env.DB.prepare(upsert).bind("event_count", totalEvents, now),
         env.DB.prepare(upsert).bind("unique_titles", uniqueTitles, now),
         env.DB.prepare(upsert).bind("unique_episodes", uniqueEpisodes, now),
+        env.DB.prepare(upsert).bind("r2_blob_count", r2BlobCount, now),
+        env.DB.prepare(upsert).bind("b2_blob_count", b2BlobCount, now),
       ]);
     }
   } catch {
@@ -99,6 +130,8 @@ async function fetchRelayInfo(env: Bindings): Promise<RelayInfo> {
     totalEvents,
     uniqueTitles,
     uniqueEpisodes,
+    r2BlobCount,
+    b2BlobCount,
     pubkey: env.RELAY_PUBLIC_KEY || "",
     commit: env.COMMIT_SHA || "unknown",
     description: "SRN Phase 2 Cloud Relay",
@@ -133,6 +166,16 @@ ui.openapi(
                 .int()
                 .min(0)
                 .describe("Unique (tmdb_id, season, episode) combinations"),
+              r2BlobCount: z
+                .number()
+                .int()
+                .min(0)
+                .describe("Total subtitle blobs stored in R2"),
+              b2BlobCount: z
+                .number()
+                .int()
+                .min(0)
+                .describe("Subtitle blobs confirmed synced to B2 backup"),
             }),
           },
         },
@@ -140,8 +183,16 @@ ui.openapi(
     },
   }),
   async (c) => {
-    const { name, version, status, totalEvents, uniqueTitles, uniqueEpisodes } =
-      await fetchRelayInfo(c.env);
+    const {
+      name,
+      version,
+      status,
+      totalEvents,
+      uniqueTitles,
+      uniqueEpisodes,
+      r2BlobCount,
+      b2BlobCount,
+    } = await fetchRelayInfo(c.env);
     return c.json({
       name,
       version,
@@ -149,6 +200,8 @@ ui.openapi(
       totalEvents,
       uniqueTitles,
       uniqueEpisodes,
+      r2BlobCount,
+      b2BlobCount,
     });
   },
 );

@@ -13,9 +13,10 @@ SRN (Subtitle Relay Network) Cloudless 是 SRN 中继节点的 Serverless 演进
 | 组件 | 角色 | 技术实现 |
 | :--- | :--- | :--- |
 | **边缘计算** | 中继逻辑、权限验证、路由转发 | Cloudflare Workers (TypeScript) |
-| **索引数据库** | 全文检索、元数据存储 | Cloudflare D1 (SQLite) |
-| **对象存储** | 字幕二进制文件存储 | Cloudflare R2 |
-| **安全防御** | 签名验证、限流、反爬 | CF WAF + Web Crypto API |
+| **索引数据库** | 元数据存储与检索 | Cloudflare D1 (SQLite) |
+| **主对象存储** | 字幕二进制文件 (gzip 压缩) | Cloudflare R2 |
+| **备份对象存储** | 字幕 Blob 异地备份（可选） | Backblaze B2 (S3 兼容) |
+| **安全防御** | Ed25519 签名验证、PoW 挑战、速率限制 | Web Crypto API + CF Rate Limiter |
 
 ## 3. 数据模型 (分层正规化)
 
@@ -30,21 +31,31 @@ SRN (Subtitle Relay Network) Cloudless 是 SRN 中继节点的 Serverless 演进
 ## 4. 关键业务流程
 
 ### A. 处理上传 (POST /v1/events)
-1. **身份验证**：校验 `pubkey` 是否被允许或受限。
-2. **签名核解**：通过 Web Crypto API 验证 `sig` 是否与 Payload 匹配。
-3. **分流存储**：
-    - 若 `content_md5` 已存在，跳过 R2 写入。
-    - 若不存在，将 Binary 流存入 R2，并同步在 `blobs` 表建档。
-4. **属性提取**：解析 Tags，将核心属性存入 `event_metadata`，其余存入 `event_tags`。
+1. **PoW 验证**：验证 `X-SRN-Nonce` 满足当前难度 `k`；VIP 白名单绕过。
+2. **签名核解**：通过 Web Crypto API 验证 `X-SRN-Signature` 与规范化消息匹配。
+3. **语义去重**：Kind 1001 计算 `dedup_hash`，若已存在则直接返回现有事件 ID（`deduplicated: true`）。
+4. **分流存储**：
+    - 将文件 gzip 压缩后写入 R2（`v1/<md5>.gz`）。
+    - 同时通过 `BackupBucket.write()` 异步镜像到 Backblaze B2（`waitUntil`）。
+    - 在 `blobs` 表建档（`INSERT OR IGNORE`，MD5 物理去重）。
+5. **属性提取**：将核心属性存入 `event_metadata`，溯源信息存入 `event_sources`，处理生命周期（1002/1003/1011）。
 
-### B. 安全防护 (Gatekeeper)
-- **防刷限流**：针对不同 PubKey 使用分布式计数器进行流控。
-- **资源保护**：R2 资源不设公开访问，Worker 根据校验结果直接 Proxy 内容流。
+### B. 处理下载 (GET /v1/events/:id/content)
+1. **PoW + 签名验证**（签名消息 = 当前 Unix 分钟数字符串）。
+2. 从 R2 读取 gzip blob，**服务端解压缩**后返回明文（避免 CDN 干扰 `Content-Encoding`）。
+3. 通过 `BackupBucket.checkExistsOrWrite()` 懒迁移：对 B2 发送 HEAD 请求，若不存在则异步 PUT。
+
+### C. 安全防护 (Gatekeeper)
+- **PoW 挑战**：`GET /v1/challenge` 返回 `{ salt, k, vip }`；难度按 IP/公钥每分钟请求次数动态递增（每 5 次 +1，上限 +4）。
+- **速率限制**：搜索（3 req/min）、下载（6 req/min）、通用（999 req/min）使用独立的 CF Rate Limiter；VIP 绕过速率限制。
+- **资源保护**：R2/B2 资源不直接公开，全部通过 Worker 校验后 Proxy。
 
 ## 5. 设计理念：Dumb Relay, Smart Client
 - **Relay (中继)**：仅负责签名的合法性检查、去重存储和按索引返回元数据。它不关心字幕的具体内容，只关心“谁在什么时间发了什么”。
 - **Client (Hijarr)**：负责解析本地文件、计算指纹、生成符合规范的 Event 报文并进行签名。
 
 ---
-**状态**: 已通过架构评审
-**目标版本**: `v2.0`
+**状态**: 已部署生产 (v3.0.0)
+**当前版本**: `v3.0.0`
+
+<!-- doc-sha: edefb69835eb9811a2f41aba039736e552aac6e3 -->

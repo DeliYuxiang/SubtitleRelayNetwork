@@ -49,4 +49,18 @@ SRN 认证协议已从“虚荣公钥”迁移至“基于 Nonce 的工作量证
 
 - **持久化身份**：生成一次密钥对后持久化保存。
 - **Nonce 复用**：由于 Salt 按分钟更新，一个 Nonce 在一分钟内通常对同一 IP 是有效的。
+- **Salt 容忍**：中继对当前分钟和上一分钟的 Salt 均接受，允许时间窗口边界的合理误差（±1 分钟）。
 - **自动重试**：当收到 `403` 错误时，客户端应自动调用 `/v1/challenge` 更新 Salt 并重新计算。
+- **k=0 时跳过挖矿**：当 `SRN_POW_DIFFICULTY=0` 且非高频请求时，`k` 为 0，`verifyPoW` 始终返回 `true`，客户端可传任意 Nonce。
+
+## 5. 中继响应头 (Relay Response Headers)
+
+所有响应均由中继通过 Ed25519 私钥签名：
+
+| Header | 说明 |
+| :--- | :--- |
+| `X-SRN-Relay-Sig` | 中继对响应体的 Ed25519 签名 (hex) |
+| `X-SRN-Relay-PubKey` | 中继公钥 (hex) |
+| `X-SRN-Relay-Timestamp` | 签名时的 Unix 时间戳 |
+
+<!-- doc-sha: edefb69835eb9811a2f41aba039736e552aac6e3 -->

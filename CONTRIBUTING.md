@@ -13,8 +13,12 @@ If you are contributing on behalf of your employer, you confirm that your employ
 ```bash
 cd worker
 npm install
-npm run dev   # local wrangler dev server
-npm test      # vitest integration tests
+npm run dev          # local wrangler dev server (plain wrangler dev)
+npm run dev:test     # interactive local dev — loads .env, optionally pulls remote D1 snapshot
+npm run dev:test:pull  # force-pull remote D1 snapshot then start
+npm run test:setup   # apply migrations to local test DB only (no server)
+npm run db:pull      # pull remote D1 snapshot to local only (no server start)
+npm test             # vitest integration tests
 ```
 
 ## Commit messages
@@ -51,3 +55,5 @@ Add a new numbered file to `worker/migrations/` — do not edit existing migrati
 ## Protocol changes
 
 Changes to the Event signing format or the `/v1/events` POST schema are breaking changes for all existing clients. Open an issue for discussion before implementing.
+
+<!-- doc-sha: edefb69835eb9811a2f41aba039736e552aac6e3 -->

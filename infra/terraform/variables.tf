@@ -39,3 +39,9 @@ variable "preview_r2_name" {
   type        = string
   default     = "srn-assets-preview"
 }
+
+variable "b2_bucket_name" {
+  description = "Name for the Backblaze B2 backup bucket"
+  type        = string
+  default     = "srn-backup-prod"
+}

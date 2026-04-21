@@ -15,3 +15,5 @@
 | 节点名称 | 运营者 | 节点 URL | 公钥 | 地理位置 |
 | :--- | :--- | :--- | :--- | :--- |
 | *Example Node* | *@Author* | `https://srn.example.workers.dev` | *your-pubkey-hex* | 全球边缘 |
+
+<!-- doc-sha: edefb69835eb9811a2f41aba039736e552aac6e3 -->

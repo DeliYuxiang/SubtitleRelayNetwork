@@ -37,7 +37,9 @@
     // Secret salt for PoW computation.
     "SRN_POW_SECRET": "dev-secret-replace-in-production",
     // Comma-separated allowed CORS origins.
-    "CORS_ORIGINS": "https://srnfrontend.pages.dev"
+    "CORS_ORIGINS": "https://srnfrontend.pages.dev",
+    // Leave empty for local dev — use Vite dev server (localhost:5173) for the frontend.
+    "FRONTEND_URL": ""
   },
   "unsafe": {
     "bindings": [

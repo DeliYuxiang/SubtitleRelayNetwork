@@ -38,6 +38,15 @@ export type Bindings = {
   SRN_POW_SECRET?: string;
   /** Comma-separated list of allowed CORS origins (e.g. https://srnfrontend.pages.dev). */
   CORS_ORIGINS?: string;
+  /** Set to "true" to return 503 for all requests. */
+  MAINTENANCE_MODE?: string;
+  /**
+   * URL of the frontend CDN (e.g. https://srn.pages.dev).
+   * All non-API GET requests are proxied here so the worker acts as the
+   * single entry point. CF Pages sets correct Cache-Control headers:
+   * hashed assets get immutable/1yr, index.html gets no-cache.
+   */
+  FRONTEND_URL?: string;
 };
 
 export const RELAY_VERSION = "3.0.0";

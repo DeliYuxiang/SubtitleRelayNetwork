@@ -6,7 +6,7 @@ const ui = new OpenAPIHono<{ Bindings: Bindings }>();
 ui.openapi(
   createRoute({
     method: "get",
-    path: "/",
+    path: "/v1/relay",
     summary: "Relay info",
     description: "Returns relay metadata and event count.",
     responses: {

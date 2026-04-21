@@ -377,7 +377,7 @@ events.openapi(
       }
     }
 
-    const eventRes = await c.env.DB.prepare(
+    await c.env.DB.prepare(
       "INSERT OR IGNORE INTO events (id, pubkey, kind, content_md5, tags, sig, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
       .bind(
@@ -391,17 +391,7 @@ events.openapi(
       )
       .run();
 
-    const isNew = eventRes.meta.changes > 0;
     const statements: D1PreparedStatement[] = [];
-
-    if (isNew) {
-      statements.push(
-        c.env.DB.prepare(
-          "INSERT INTO relay_stats(key, value) VALUES('event_count', 1) " +
-            "ON CONFLICT(key) DO UPDATE SET value = relay_stats.value + 1",
-        ),
-      );
-    }
 
     if (kind === 1002 || kind === 1003) {
       const targetId = (eventObj.tags || []).find(

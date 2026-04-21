@@ -7,11 +7,14 @@ const ui = new OpenAPIHono<{ Bindings: Bindings }>();
 // Single source of truth for all relay metadata consumed by /v1/relay,
 // /v1/identity, and /v1/health.  DB query is performed once per call here.
 
-// Computed stats (uniqueTitles, uniqueEpisodes) are cached in relay_stats and
-// refreshed lazily: a full table scan runs only when the cached value is older
-// than STATS_TTL_SECONDS.  event_count is maintained incrementally on publish
-// and is never subject to TTL.
+// All three counters are cached in relay_stats and refreshed lazily as a
+// group: when the oldest cached value exceeds STATS_TTL_SECONDS, all three
+// are recomputed in one parallel batch and written back.  No stats updates
+// happen in the publish path — reads are always O(1) key-value lookups.
 const STATS_TTL_SECONDS = 5 * 60;
+
+const SUBQUERY =
+  "NOT EXISTS (SELECT 1 FROM event_lifecycle l WHERE l.event_id = m.event_id)";
 
 interface RelayInfo {
   name: "SRN Relay";
@@ -32,7 +35,7 @@ async function fetchRelayInfo(env: Bindings): Promise<RelayInfo> {
   try {
     const now = Math.floor(Date.now() / 1000);
 
-    // Single-row reads — all O(1) primary-key lookups.
+    // Three O(1) primary-key reads.
     const [eventsRow, titlesRow, episodesRow] = await Promise.all([
       env.DB.prepare(
         "SELECT value, updated_at FROM relay_stats WHERE key = 'event_count'",
@@ -49,55 +52,42 @@ async function fetchRelayInfo(env: Bindings): Promise<RelayInfo> {
     uniqueTitles = titlesRow?.value ?? 0;
     uniqueEpisodes = episodesRow?.value ?? 0;
 
-    // Recompute stale counters (full scan, runs at most once per TTL window).
-    const titlesStale =
-      !titlesRow || now - (titlesRow.updated_at ?? 0) > STATS_TTL_SECONDS;
-    const episodesStale =
-      !episodesRow || now - (episodesRow.updated_at ?? 0) > STATS_TTL_SECONDS;
-
-    if (titlesStale || episodesStale) {
-      const [freshTitles, freshEpisodes] = await Promise.all([
-        titlesStale
-          ? env.DB.prepare(
-              `SELECT COUNT(DISTINCT m.tmdb_id) AS count
-               FROM event_metadata m
-               WHERE NOT EXISTS (
-                 SELECT 1 FROM event_lifecycle l WHERE l.event_id = m.event_id
-               )`,
-            ).first<{ count: number }>()
-          : Promise.resolve<{ count: number } | null>(null),
-        episodesStale
-          ? env.DB.prepare(
-              `SELECT COUNT(DISTINCT
-                 m.tmdb_id || ':' ||
-                 COALESCE(CAST(m.season_num  AS TEXT), '') || ':' ||
-                 COALESCE(CAST(m.episode_num AS TEXT), '')) AS count
-               FROM event_metadata m
-               WHERE NOT EXISTS (
-                 SELECT 1 FROM event_lifecycle l WHERE l.event_id = m.event_id
-               )`,
-            ).first<{ count: number }>()
-          : Promise.resolve<{ count: number } | null>(null),
+    // All three counters share the same TTL.  Refresh as a group when the
+    // oldest cached value has expired.
+    const oldest = Math.min(
+      eventsRow?.updated_at ?? 0,
+      titlesRow?.updated_at ?? 0,
+      episodesRow?.updated_at ?? 0,
+    );
+    if (now - oldest > STATS_TTL_SECONDS) {
+      const [freshEvents, freshTitles, freshEpisodes] = await Promise.all([
+        env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM event_metadata m WHERE ${SUBQUERY}`,
+        ).first<{ count: number }>(),
+        env.DB.prepare(
+          `SELECT COUNT(DISTINCT m.tmdb_id) AS count FROM event_metadata m WHERE ${SUBQUERY}`,
+        ).first<{ count: number }>(),
+        env.DB.prepare(
+          `SELECT COUNT(DISTINCT
+             m.tmdb_id || ':' ||
+             COALESCE(CAST(m.season_num  AS TEXT), '') || ':' ||
+             COALESCE(CAST(m.episode_num AS TEXT), '')) AS count
+           FROM event_metadata m WHERE ${SUBQUERY}`,
+        ).first<{ count: number }>(),
       ]);
 
-      const updates: D1PreparedStatement[] = [];
+      totalEvents = freshEvents?.count ?? 0;
+      uniqueTitles = freshTitles?.count ?? 0;
+      uniqueEpisodes = freshEpisodes?.count ?? 0;
+
       const upsert =
         "INSERT INTO relay_stats(key, value, updated_at) VALUES(?, ?, ?)" +
         " ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at";
-
-      if (freshTitles !== null) {
-        uniqueTitles = freshTitles?.count ?? 0;
-        updates.push(
-          env.DB.prepare(upsert).bind("unique_titles", uniqueTitles, now),
-        );
-      }
-      if (freshEpisodes !== null) {
-        uniqueEpisodes = freshEpisodes?.count ?? 0;
-        updates.push(
-          env.DB.prepare(upsert).bind("unique_episodes", uniqueEpisodes, now),
-        );
-      }
-      if (updates.length > 0) await env.DB.batch(updates);
+      await env.DB.batch([
+        env.DB.prepare(upsert).bind("event_count", totalEvents, now),
+        env.DB.prepare(upsert).bind("unique_titles", uniqueTitles, now),
+        env.DB.prepare(upsert).bind("unique_episodes", uniqueEpisodes, now),
+      ]);
     }
   } catch {
     // DB not yet initialised (fresh preview deployment)

@@ -4,21 +4,25 @@ export interface RateLimit {
   limit(options: { key: string }): Promise<{ success: boolean }>;
 }
 
-export const ChallengeSchema = z.object({
-  salt: z.string().describe("Hex HMAC salt tied to IP and time window"),
-  k: z
-    .number()
-    .int()
-    .min(0)
-    .describe("Number of leading zero hex chars required"),
-});
+export const ChallengeSchema = z
+  .object({
+    salt: z.string().describe("Hex HMAC salt tied to IP and time window"),
+    k: z
+      .number()
+      .int()
+      .min(0)
+      .describe("Number of leading zero hex chars required"),
+  })
+  .openapi("Challenge");
 
-export const ErrorSchema = z.object({
-  error: z.string(),
-  challenge: ChallengeSchema.optional().describe(
-    "PoW challenge — present on 401/403 when proof-of-work is required",
-  ),
-});
+export const ErrorSchema = z
+  .object({
+    error: z.string(),
+    challenge: ChallengeSchema.optional().describe(
+      "PoW challenge — present on 401/403 when proof-of-work is required",
+    ),
+  })
+  .openapi("ErrorResponse");
 
 export type Bindings = {
   DB: D1Database;

@@ -6,6 +6,10 @@ terraform {
       source  = "cloudflare/cloudflare"
       version = "~> 4.0"
     }
+    b2 = {
+      source  = "Backblaze/b2"
+      version = "~> 0.9"
+    }
   }
 
   # Cloudflare R2 as S3-compatible Terraform state backend.
@@ -29,4 +33,11 @@ terraform {
 
 provider "cloudflare" {
   api_token = var.cloudflare_api_token
+}
+
+provider "b2" {
+  # Credentials are read from the standard Backblaze environment variables:
+  #   B2_APPLICATION_KEY_ID and B2_APPLICATION_KEY
+  # Set these as GitHub Secrets (B2_MASTER_KEY_ID / B2_MASTER_APP_KEY);
+  # terraform.yml maps them to the expected env var names at plan/apply time.
 }

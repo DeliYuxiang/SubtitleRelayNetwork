@@ -5,6 +5,7 @@ import {
   verifyDownloadRequest,
   isVip,
 } from "../lib/verify-pubkey";
+import { BackupBucket } from "../lib/backup-bucket";
 
 const EventSchema = z
   .object({
@@ -216,9 +217,20 @@ events.openapi(
     // Explicitly decompress here so clients always receive plain text.
     const isGzipped = headers.get("content-encoding") === "gzip";
     headers.delete("content-encoding");
+
+    // Buffer compressed bytes so we can (a) lazy-sync to B2 and (b) rebuild a
+    // fresh stream for decompression — R2 body is single-use. Max 5 MB, acceptable.
+    const compressedBytes = await object.arrayBuffer();
+    new BackupBucket(c.env, c.executionCtx).checkExistsOrWrite(
+      blobInfo.r2_key,
+      compressedBytes,
+      headers.get("content-type") || "text/plain",
+    );
+
+    const bodyStream = new Response(compressedBytes).body!;
     const body = isGzipped
-      ? object.body.pipeThrough(new DecompressionStream("gzip"))
-      : object.body;
+      ? bodyStream.pipeThrough(new DecompressionStream("gzip"))
+      : bodyStream;
     return new Response(body, { headers }) as any;
   },
 );
@@ -330,6 +342,11 @@ events.openapi(
           contentEncoding: "gzip",
         },
       });
+      new BackupBucket(c.env, c.executionCtx).write(
+        r2Key,
+        compressedBuffer,
+        file.type || "text/plain",
+      );
       await c.env.DB.prepare(
         "INSERT OR IGNORE INTO blobs (content_md5, r2_key, size, created_at) VALUES (?, ?, ?, ?)",
       )

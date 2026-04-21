@@ -52,6 +52,14 @@ export type Bindings = {
    * hashed assets get immutable/1yr, index.html gets no-cache.
    */
   FRONTEND_URL?: string;
+  /** Backblaze B2 backup bucket — all optional, no-op if unset. */
+  B2_KEY_ID?: string;
+  B2_APP_KEY?: string;
+  /** e.g. https://s3.us-west-004.backblazeb2.com */
+  B2_ENDPOINT?: string;
+  B2_BUCKET_NAME?: string;
+  /** Defaults to "us-west-004" in code if unset. */
+  B2_REGION?: string;
 };
 
 export const RELAY_VERSION = version;

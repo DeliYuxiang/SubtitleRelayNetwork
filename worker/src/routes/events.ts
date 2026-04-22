@@ -6,6 +6,14 @@ import {
   isVip,
 } from "../lib/verify-pubkey";
 import { BackupBucket } from "../lib/backup-bucket";
+import { handleKind1001 } from "../lib/event-handlers/kind-1001";
+import { handleKind1002 } from "../lib/event-handlers/kind-1002";
+import { handleKind1003 } from "../lib/event-handlers/kind-1003";
+import { handleKind1011 } from "../lib/event-handlers/kind-1011";
+import type {
+  KindHandlerContext,
+  SrnEventInput,
+} from "../lib/event-handlers/types";
 
 const EventSchema = z
   .object({
@@ -285,7 +293,7 @@ events.openapi(
     const { event: eventJsonStr, file: rawFile } = c.req.valid("form");
     const file = rawFile as File | undefined;
 
-    let eventObj: any;
+    let eventObj: SrnEventInput;
     try {
       eventObj = JSON.parse(eventJsonStr);
     } catch (e) {
@@ -356,42 +364,43 @@ events.openapi(
 
     const now = Math.floor(Date.now() / 1000);
 
-    // Compute dedup hash for Kind 1001 — reused in the event_metadata INSERT below.
-    // Formula must match migration_0009_dedup_hash.yml backfill script exactly:
-    //   MD5(pubkey|content_md5|tmdb_id|season_num|episode_num|language|archive_md5)
-    let dedupHash: string | null = null;
-    if (kind === 1001) {
-      const hashBuf = await crypto.subtle.digest(
-        "MD5",
-        new TextEncoder().encode(
-          [
-            pubKeyHex,
-            contentMd5,
-            String(eventObj.tmdb_id ?? ""),
-            String(eventObj.season_num || 0),
-            String(eventObj.episode_num || 0),
-            eventObj.language || "und",
-            eventObj.archive_md5 || "",
-          ].join("|"),
-        ),
-      );
-      dedupHash = Array.from(new Uint8Array(hashBuf))
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
+    // Dispatch to per-kind handler
+    const ctx: KindHandlerContext = {
+      db: c.env.DB,
+      eventObj,
+      pubKeyHex,
+      now,
+      contentMd5,
+    };
 
-      const existing = await c.env.DB.prepare(
-        "SELECT event_id FROM event_metadata WHERE dedup_hash = ?",
-      )
-        .bind(dedupHash)
-        .first<{ event_id: string }>();
+    let handlerResult;
+    switch (kind) {
+      case 1001:
+        handlerResult = await handleKind1001(ctx);
+        break;
+      case 1002:
+        handlerResult = await handleKind1002(ctx);
+        break;
+      case 1003:
+        handlerResult = await handleKind1003(ctx);
+        break;
+      case 1011:
+        handlerResult = await handleKind1011(ctx);
+        break;
+      default:
+        return c.json({ error: `Unsupported event kind: ${kind}` }, 400);
+    }
 
-      if (existing) {
-        return c.json({
-          success: true,
-          id: existing.event_id,
-          deduplicated: true,
-        });
-      }
+    if ("validationError" in handlerResult) {
+      return c.json({ error: handlerResult.validationError }, 400);
+    }
+
+    if (handlerResult.deduplicated) {
+      return c.json({
+        success: true,
+        id: handlerResult.existingId,
+        deduplicated: true,
+      });
     }
 
     await c.env.DB.prepare(
@@ -408,79 +417,8 @@ events.openapi(
       )
       .run();
 
-    const statements: D1PreparedStatement[] = [];
-
-    if (kind === 1002 || kind === 1003) {
-      const targetId = (eventObj.tags || []).find(
-        (t: any) => t[0] === "e",
-      )?.[1];
-      if (targetId) {
-        const target = await c.env.DB.prepare(
-          "SELECT pubkey FROM events WHERE id = ?",
-        )
-          .bind(targetId)
-          .first<{ pubkey: string }>();
-        if (target && target.pubkey === pubKeyHex) {
-          statements.push(
-            c.env.DB.prepare(
-              "INSERT OR REPLACE INTO event_lifecycle (event_id, deactivated_by, deactivated_at, pubkey) VALUES (?, ?, ?, ?)",
-            ).bind(targetId, eventObj.id, now, pubKeyHex),
-          );
-        }
-      }
-    }
-
-    if (kind === 1011) {
-      const alias = (eventObj.tags || []).find(
-        (t: any) => t[0] === "alias",
-      )?.[1];
-      if (alias) {
-        statements.push(
-          c.env.DB.prepare(
-            "INSERT OR REPLACE INTO event_keys (pubkey, alias, url, about, event_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-          ).bind(
-            pubKeyHex,
-            alias,
-            (eventObj.tags || []).find((t: any) => t[0] === "url")?.[1] || "",
-            (eventObj.tags || []).find((t: any) => t[0] === "about")?.[1] || "",
-            eventObj.id,
-            now,
-          ),
-        );
-        statements.push(
-          c.env.DB.prepare(
-            "INSERT OR REPLACE INTO event_lifecycle (event_id, deactivated_by, deactivated_at, pubkey) SELECT id, ?, ?, pubkey FROM events WHERE pubkey = ? AND kind = 1011 AND id != ?",
-          ).bind(eventObj.id, now, pubKeyHex, eventObj.id),
-        );
-      }
-    }
-
-    if (hasContent) {
-      statements.push(
-        c.env.DB.prepare(
-          "INSERT OR IGNORE INTO event_metadata (event_id, tmdb_id, season_num, episode_num, language, archive_md5, dedup_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ).bind(
-          eventObj.id,
-          eventObj.tmdb_id,
-          eventObj.season_num || 0,
-          eventObj.episode_num || 0,
-          eventObj.language || "und",
-          eventObj.archive_md5 || "",
-          dedupHash,
-        ),
-      );
-
-      if (eventObj.source_type && eventObj.source_uri) {
-        statements.push(
-          c.env.DB.prepare(
-            "INSERT OR IGNORE INTO event_sources (event_id, source_type, source_uri) VALUES (?, ?, ?)",
-          ).bind(eventObj.id, eventObj.source_type, eventObj.source_uri),
-        );
-      }
-    }
-
-    if (statements.length > 0) {
-      await c.env.DB.batch(statements);
+    if (handlerResult.statements.length > 0) {
+      await c.env.DB.batch(handlerResult.statements);
     }
     return c.json({ success: true, id: eventObj.id });
   },

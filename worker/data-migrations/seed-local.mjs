@@ -8,6 +8,11 @@
 //   LOCAL_DB_PATH=<path/to/db.sqlite> BACKUP_FILE=<dump.sql> node seed-local.mjs
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+// Guard: only execute when run directly (node seed-local.mjs).
+// If imported by run.mjs or another module, do nothing.
+if (process.argv[1] !== fileURLToPath(import.meta.url)) process.exit(0);
 
 const { LOCAL_DB_PATH, BACKUP_FILE } = process.env;
 if (!LOCAL_DB_PATH || !BACKUP_FILE) {

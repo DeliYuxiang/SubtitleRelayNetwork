@@ -72,6 +72,7 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       WRANGLER_NON_INTERACTIVE: "true"
+      WRANGLER_LOG: warn
       PREVIEW_D1_NAME: ${{ needs.resolve-infra.outputs.d1_name }}
       PREVIEW_D1_ID:   ${{ needs.resolve-infra.outputs.d1_id }}
       PROD_D1_NAME:    ${{ needs.resolve-prod-infra.outputs.d1_name }}
@@ -118,7 +119,11 @@ jobs:
 
           # 1. Export production D1 to a SQL dump
           echo "Exporting production D1 ($PROD_D1_NAME)..."
-          npx wrangler d1 export "$PROD_D1_NAME" --remote --output /tmp/prod.sql
+          EXPORT_LOG=$(npx wrangler d1 export "$PROD_D1_NAME" --remote --output /tmp/prod.sql 2>&1) || { echo "$EXPORT_LOG"; exit 1; }
+          # Mask the pre-signed download URL — it grants temporary read access to production data.
+          PRESIGNED=$(printf '%s' "$EXPORT_LOG" | grep -oE 'https://[^ ]*r2\.cloudflarestorage\.com[^ ]*' | head -n 1)
+          [ -n "$PRESIGNED" ] && echo "::add-mask::$PRESIGNED"
+          printf '%s\n' "$EXPORT_LOG" | grep -v 'r2\.cloudflarestorage\.com'
 
           # 2. Local Migrations (SQL + Data) on the snapshot
           # Use a lightweight SELECT to force wrangler to create the SQLite file

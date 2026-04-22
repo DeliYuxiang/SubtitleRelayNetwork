@@ -184,6 +184,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_NON_INTERACTIVE: "true"
+          WRANGLER_LOG: warn
         run: |
           cd worker
 
@@ -219,7 +220,11 @@ jobs:
           # 3. Backup production D1 to a file
           BACKUP_FILE="backup-$(date +%Y%m%d-%H%M%S)-$SHORT_SHA.sql"
           echo "::notice::Exporting production D1 to $BACKUP_FILE"
-          npx wrangler d1 export "$SRN_D1_NAME" --remote --output "$BACKUP_FILE"
+          EXPORT_LOG=$(npx wrangler d1 export "$SRN_D1_NAME" --remote --output "$BACKUP_FILE" 2>&1) || { echo "$EXPORT_LOG"; exit 1; }
+          # Mask the pre-signed download URL — it grants temporary read access to production data.
+          PRESIGNED=$(printf '%s' "$EXPORT_LOG" | grep -oE 'https://[^ ]*r2\.cloudflarestorage\.com[^ ]*' | head -n 1)
+          [ -n "$PRESIGNED" ] && echo "::add-mask::$PRESIGNED"
+          printf '%s\n' "$EXPORT_LOG" | grep -v 'r2\.cloudflarestorage\.com'
           npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/$BACKUP_FILE" --file "$BACKUP_FILE" --remote
           echo "backup_file=$BACKUP_FILE" >> $GITHUB_OUTPUT
 

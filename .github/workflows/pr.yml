@@ -121,18 +121,23 @@ jobs:
           npx wrangler d1 export "$PROD_D1_NAME" --remote --output /tmp/prod.sql
 
           # 2. Local Migrations (SQL + Data) on the snapshot
-          echo "Seeding local emulator from production snapshot..."
-          npx wrangler d1 execute DB --local --file=/tmp/prod.sql --config wrangler.test.jsonc
-
-          echo "Applying SQL migrations locally..."
+          echo "Initializing local D1..."
           npx wrangler d1 migrations apply DB --local --config wrangler.test.jsonc
 
-          echo "Running data migrations locally..."
           LOCAL_DB_PATH=$(find .wrangler/state/v3/d1 -name "*.sqlite" | head -n 1)
           if [ -z "$LOCAL_DB_PATH" ]; then
             echo "::error::Could not find local SQLite file in .wrangler"
             exit 1
           fi
+
+          echo "Seeding local emulator from production snapshot..."
+          LOCAL_DB_PATH="$LOCAL_DB_PATH" BACKUP_FILE=/tmp/prod.sql \
+            node data-migrations/seed-local.mjs
+
+          echo "Applying SQL migrations locally..."
+          npx wrangler d1 migrations apply DB --local --config wrangler.test.jsonc
+
+          echo "Running data migrations locally..."
           LOCAL_DB_PATH="$LOCAL_DB_PATH" node data-migrations/run.mjs
 
           # 3. Export migrated database

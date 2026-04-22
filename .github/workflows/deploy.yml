@@ -566,6 +566,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          RELAY_PUBLIC_KEY: ${{ secrets.RELAY_PUBLIC_KEY }}
           WRANGLER_NON_INTERACTIVE: "true"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -573,7 +574,9 @@ jobs:
           PREV_SHA=$(echo "$BACKUP_FILE" | grep -oE "[a-f0-9]{7}" | tail -n 1)
           if [ -z "$PREV_SHA" ]; then
             echo "::error::Could not extract SHA from backup filename '$BACKUP_FILE'. Falling back to maintenance-off deploy."
-            cd worker && npx wrangler deploy --config wrangler.production.jsonc --var MAINTENANCE_MODE:false
+            cd worker && npx wrangler deploy --config wrangler.production.jsonc \
+              --var MAINTENANCE_MODE:false \
+              --var RELAY_PUBLIC_KEY:"$RELAY_PUBLIC_KEY"
             exit 0
           fi
 
@@ -581,19 +584,27 @@ jobs:
           git checkout "$PREV_SHA"
           cd worker
           npm ci
-          npx wrangler deploy --config wrangler.production.jsonc --var MAINTENANCE_MODE:false
+          npx wrangler deploy --config wrangler.production.jsonc \
+            --var MAINTENANCE_MODE:false \
+            --var COMMIT_SHA:"$PREV_SHA" \
+            --var RELAY_PUBLIC_KEY:"$RELAY_PUBLIC_KEY"
           echo -n "$PREV_SHA" > /tmp/deployed_sha.txt
           npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt --remote
           echo "::notice::Emergency rollback complete — live at $PREV_SHA, DB restored from $BACKUP_FILE"
 
-      # --- Path B: Only finalize-deploy failed → DB is clean, just turn maintenance off ---
+      # --- Path B: Only finalize-deploy failed → DB is migrated, deploy HEAD with maintenance off ---
       - name: Disable Maintenance Mode (no DB changes)
         if: steps.configure.outputs.db_touched == 'false'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          RELAY_PUBLIC_KEY: ${{ secrets.RELAY_PUBLIC_KEY }}
           WRANGLER_NON_INTERACTIVE: "true"
         run: |
           cd worker
+          SHORT_SHA=$(git rev-parse --short HEAD)
           echo "::warning::Deployment failed after DB migration. Forcing maintenance mode OFF..."
-          npx wrangler deploy --config wrangler.production.jsonc --var MAINTENANCE_MODE:false
+          npx wrangler deploy --config wrangler.production.jsonc \
+            --var MAINTENANCE_MODE:false \
+            --var COMMIT_SHA:"$SHORT_SHA" \
+            --var RELAY_PUBLIC_KEY:"$RELAY_PUBLIC_KEY"

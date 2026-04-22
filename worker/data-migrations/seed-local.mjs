@@ -71,5 +71,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
 
   db.exec('PRAGMA foreign_keys=ON;');
+
+  // Restore synchronous mode and force a full WAL checkpoint so all data is
+  // flushed to db.sqlite before the process exits.  Without this, wrangler's
+  // workerd reader (which may bypass the OS page cache) would see an empty DB.
+  db.exec('PRAGMA synchronous=NORMAL;');
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+
   console.log(`Done — ${total} statements in ${((Date.now() - start) / 1000).toFixed(1)}s`);
 }

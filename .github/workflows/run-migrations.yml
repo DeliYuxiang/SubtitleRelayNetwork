@@ -31,7 +31,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       # When triggered manually (workflow_dispatch), d1_id is not passed in,
       # so we resolve it from Terraform state here.

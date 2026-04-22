@@ -190,7 +190,7 @@ jobs:
           cd worker
 
           # 1. Read previously deployed SHA and URL from R2 (written by Deploy Worker step)
-          npx wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt 2>/dev/null || true
+          npx wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt --remote 2>/dev/null || true
           SHORT_SHA=$(cat /tmp/deployed_sha.txt 2>/dev/null | tr -d '[:space:]')
           if [ -z "$SHORT_SHA" ]; then
             SHORT_SHA="initial"
@@ -198,7 +198,7 @@ jobs:
           echo "::notice::Currently deployed SHA: $SHORT_SHA"
 
           # 1b. Check if server is already in maintenance mode.
-          npx wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt 2>/dev/null || true
+          npx wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt --remote 2>/dev/null || true
           LIVE_URL=$(cat /tmp/deployed_url.txt 2>/dev/null | tr -d '[:space:]')
           if [ -n "$LIVE_URL" ]; then
             HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$LIVE_URL/v1/health" 2>/dev/null || echo "000")
@@ -437,11 +437,11 @@ jobs:
           echo "$DEPLOY_OUTPUT"
 
           echo -n "$SHORT_SHA" > /tmp/deployed_sha.txt
-          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt
+          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt --remote
 
           DEPLOYED_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE "https://[a-zA-Z0-9.-]+\.workers\.dev" | head -n 1)
           echo -n "$DEPLOYED_URL" > /tmp/deployed_url.txt
-          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt
+          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt --remote
           echo "deployed_url=$DEPLOYED_URL" >> $GITHUB_OUTPUT
 
       - name: Cleanup provision branches
@@ -534,6 +534,24 @@ jobs:
               --file "$BACKUP_FILE" --remote --config wrangler.production.jsonc
           fi
 
+          # Clear all user tables before restoring — backup SQL uses CREATE TABLE without IF NOT EXISTS
+          echo "::notice::Clearing existing tables before restore..."
+          D1_API="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database/$SRN_D1_ID"
+          QUERY_OUT=$(curl -s "$D1_API/query" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"sql":"SELECT name FROM sqlite_master WHERE type=\u0027table\u0027 AND name NOT LIKE \u0027sqlite_%\u0027","params":[]}')
+          TABLES=$(echo "$QUERY_OUT" | jq -r '(.result[0].results // [])[] | .name | select(startswith("_cf_") | not)')
+          if [ -n "$TABLES" ]; then
+            {
+              echo "PRAGMA foreign_keys=OFF;"
+              for t in $TABLES; do echo "DROP TABLE IF EXISTS \"$t\";"; done
+              echo "PRAGMA foreign_keys=ON;"
+            } > /tmp/reset_db.sql
+            npx wrangler d1 execute "$SRN_D1_NAME" --remote --file=/tmp/reset_db.sql --yes \
+              --config wrangler.production.jsonc
+          fi
+
           echo "::warning::Restoring D1 from backup: $BACKUP_FILE"
           npx wrangler d1 execute "$SRN_D1_NAME" \
             --remote --file="$BACKUP_FILE" --yes --config wrangler.production.jsonc
@@ -561,7 +579,7 @@ jobs:
           npm ci
           npx wrangler deploy --config wrangler.production.jsonc --var MAINTENANCE_MODE:false
           echo -n "$PREV_SHA" > /tmp/deployed_sha.txt
-          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt
+          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt --remote
           echo "::notice::Emergency rollback complete — live at $PREV_SHA, DB restored from $BACKUP_FILE"
 
       # --- Path B: Only finalize-deploy failed → DB is clean, just turn maintenance off ---

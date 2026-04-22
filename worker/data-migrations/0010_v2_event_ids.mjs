@@ -17,37 +17,20 @@
 //   event_lifecycle.deactivated_by   — FK (the retract/replace event's own ID)
 //   event_keys.event_id              — FK
 //
-// D1 notes:
-//   - No batch endpoint; each UPDATE is a separate REST call.
-//   - 100-variable limit per query; 3 vars/row (2 CASE + 1 WHERE-IN) → 33 rows/sub-batch.
-//   - D1 does not enforce FK constraints, so cross-table consistency is purely our concern.
-//   - Idempotent: only selects WHERE LENGTH(id) = 32 (V1 IDs), so re-running is safe.
+// Strategy (local SQLite — no D1 variable or round-trip constraints):
+//   PRAGMA foreign_keys=OFF on the single connection, then directly UPDATE events.id.
+//   No INSERT+DELETE dance needed. All child tables updated in sub-batches within
+//   the same transaction. PRAGMA foreign_keys=ON after the loop.
+//
+//   Variable budget: SQLite default limit is 999. 3 vars/row × 300 rows = 900 < 999.
+//
+// Idempotent: only selects WHERE LENGTH(id) = 32 (V1 IDs), so re-running is safe.
 
 import { createHash } from 'node:crypto';
+import { d1 } from './lib.mjs';
 
-const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
-const API_TOKEN  = process.env.CLOUDFLARE_API_TOKEN;
-const DB_ID      = process.env.SRN_D1_ID;
-
-if (!ACCOUNT_ID || !API_TOKEN || !DB_ID) {
-  console.error('Missing required env vars: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, SRN_D1_ID');
-  process.exit(1);
-}
-
-const BASE       = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/d1/database/${DB_ID}`;
-const BATCH_SIZE = 500;  // rows fetched per SELECT
-const SUB_BATCH  = 33;   // rows per CASE UPDATE (3 vars/row × 33 = 99, under D1's 100-var limit)
-
-async function d1(sql, params = []) {
-  const res = await fetch(`${BASE}/query`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${API_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sql, params }),
-  });
-  const data = await res.json();
-  if (!data.success) throw new Error(`D1 error: ${JSON.stringify(data.errors)}\nSQL: ${sql}`);
-  return data.result[0];
-}
+const BATCH_SIZE = 5000; // rows fetched per SELECT
+const SUB_BATCH  = 300;  // rows per CASE UPDATE (3 vars/row × 300 = 900 < SQLite 999-var limit)
 
 // ─── Canonical ID computation ────────────────────────────────────────────────
 // Must match Go ComputeIDV2() and TS computeID() exactly.
@@ -65,7 +48,7 @@ function computeIDV2(pubkey, kind, tagsJson, contentMd5) {
   return createHash('sha256').update(canonical).digest('hex'); // 64 hex chars
 }
 
-// ─── Batch helpers ────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function chunk(arr, size) {
   const out = [];
@@ -73,40 +56,35 @@ function chunk(arr, size) {
   return out;
 }
 
-// Build a CASE-based UPDATE for `table.col` in one REST call.
-// Skips the call entirely if there are no rows to update.
+// CASE-based UPDATE OR IGNORE for a single column, followed by a DELETE to clean up
+// any V1 refs that could not be renamed because the V2 value already existed.
+//
+// UPDATE OR IGNORE: rename V1→V2; skip (no-op) rows where the new value would
+// violate a UNIQUE/PK constraint (i.e. V2 already exists).
+// DELETE: remove V1 rows that were skipped — their V2 counterpart already holds the
+// canonical data, so the V1 row is redundant.
+// Rows that were successfully renamed now have col=V2, so the DELETE is a no-op for them.
 async function caseUpdate(table, col, pairs) {
-  if (pairs.length === 0) return 0;
-  const inList  = pairs.map(() => '?').join(',');
+  if (pairs.length === 0) return;
   const caseWhen = pairs.map(() => 'WHEN ? THEN ?').join(' ');
-  const result = await d1(
-    `UPDATE ${table} SET ${col} = CASE ${col} ${caseWhen} END WHERE ${col} IN (${inList})`,
-    [...pairs.flatMap(([v1, v2]) => [v1, v2]), ...pairs.map(([v1]) => v1)],
+  const inList = pairs.map(() => '?').join(',');
+  const v1s = pairs.map(([v1]) => v1);
+  await d1(
+    `UPDATE OR IGNORE ${table} SET ${col} = CASE ${col} ${caseWhen} END WHERE ${col} IN (${inList})`,
+    [...pairs.flatMap(([v1, v2]) => [v1, v2]), ...v1s],
   );
-  return result?.meta?.changes ?? 0;
-}
-
-// Process a sub-batch: update all 7 columns that hold an event ID.
-async function processSubBatch(pairs) {
-  // events.id first — other tables' FKs reference this.
-  // SQLite allows updating TEXT PRIMARY KEY values directly.
-  await caseUpdate('events',           'id',             pairs);
-  await caseUpdate('event_metadata',   'event_id',       pairs);
-  await caseUpdate('event_tags',       'event_id',       pairs);
-  await caseUpdate('event_sources',    'event_id',       pairs);
-  await caseUpdate('event_lifecycle',  'event_id',       pairs);
-  await caseUpdate('event_lifecycle',  'deactivated_by', pairs);
-  await caseUpdate('event_keys',       'event_id',       pairs);
+  await d1(`DELETE FROM ${table} WHERE ${col} IN (${inList})`, v1s);
 }
 
 // ─── Main migration ───────────────────────────────────────────────────────────
 
 export default async function run() {
+  await d1('PRAGMA foreign_keys=OFF');
+
   let totalMigrated = 0;
   let outerIter = 0;
 
   while (true) {
-    // Fetch the next batch of V1 events (LENGTH(id) = 32 detects V1 IDs safely).
     const { results } = await d1(
       `SELECT id, pubkey, kind, tags, content_md5 FROM events WHERE LENGTH(id) = 32 LIMIT ?`,
       [BATCH_SIZE],
@@ -115,29 +93,50 @@ export default async function run() {
     if (!results?.length) break;
     outerIter++;
 
-    // Compute V2 IDs locally — no round-trips needed.
-    const pairs = results.map(row => [
-      row.id,
-      computeIDV2(row.pubkey, row.kind, row.tags, row.content_md5),
-    ]);
+    const pairs = results
+      .map(row => [row.id, computeIDV2(row.pubkey, row.kind, row.tags, row.content_md5)])
+      .filter(([v1, v2]) => {
+        if (v1 === v2) {
+          console.warn(`⚠  ID collision skipped: ${v1}`);
+          return false;
+        }
+        return true;
+      });
 
-    // Sanity-check: V1 and V2 must differ (if they happen to collide, skip to avoid data loss).
-    const safePairs = pairs.filter(([v1, v2]) => {
-      if (v1 === v2) {
-        console.warn(`⚠  ID collision skipped: ${v1}`);
-        return false;
-      }
-      return true;
-    });
+    await d1('BEGIN');
 
-    // Process in sub-batches of SUB_BATCH rows (D1 100-var limit).
-    for (const sub of chunk(safePairs, SUB_BATCH)) {
-      await processSubBatch(sub);
-      totalMigrated += sub.length;
+    for (const sub of chunk(pairs, SUB_BATCH)) {
+      const caseWhen = sub.map(() => 'WHEN ? THEN ?').join(' ');
+      const inList   = sub.map(() => '?').join(',');
+      const v1s      = sub.map(([v1]) => v1);
+
+      // Rename V1→V2. OR IGNORE skips rows where V2 already exists (new clients may
+      // have already inserted events with V2 IDs). Those V1 rows are cleaned up below.
+      await d1(
+        `UPDATE OR IGNORE events SET id = CASE id ${caseWhen} END WHERE id IN (${inList})`,
+        [...sub.flatMap(([v1, v2]) => [v1, v2]), ...v1s],
+      );
+
+      // Update child tables. caseUpdate uses UPDATE OR IGNORE + DELETE so that child
+      // rows tied to a pre-existing V2 event are removed rather than left as orphans.
+      await caseUpdate('event_metadata',  'event_id',       sub);
+      await caseUpdate('event_tags',      'event_id',       sub);
+      await caseUpdate('event_sources',   'event_id',       sub);
+      await caseUpdate('event_lifecycle', 'event_id',       sub);
+      await caseUpdate('event_lifecycle', 'deactivated_by', sub);
+      await caseUpdate('event_keys',      'event_id',       sub);
+
+      // Delete any V1 events whose rename was skipped (V2 already existed).
+      // Rows that were successfully renamed now have id=V2, so this DELETE is a no-op for them.
+      await d1(`DELETE FROM events WHERE id IN (${inList})`, v1s);
     }
 
+    await d1('COMMIT');
+
+    totalMigrated += pairs.length;
     console.log(`  Batch ${outerIter}: migrated ${results.length} events (total: ${totalMigrated})`);
   }
 
+  await d1('PRAGMA foreign_keys=ON');
   console.log(`\nV1→V2 ID migration complete. Total events migrated: ${totalMigrated}`);
 }

@@ -11,32 +11,11 @@
 //
 // Formula must match events.ts computeDedupHash() exactly.
 import { createHash } from 'node:crypto';
+import { d1 } from './lib.mjs';
 
-const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
-const API_TOKEN  = process.env.CLOUDFLARE_API_TOKEN;
-const DB_ID      = process.env.SRN_D1_ID;
+const BATCH_SIZE  = 5000; // rows fetched per SELECT
+const WRITE_BATCH = 300;  // rows per CASE UPDATE (3 params/row × 300 = 900, under SQLite's 999-variable limit)
 
-if (!ACCOUNT_ID || !API_TOKEN || !DB_ID) {
-  console.error('Missing required env vars: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, SRN_D1_ID');
-  process.exit(1);
-}
-
-const BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/d1/database/${DB_ID}`;
-const BATCH_SIZE  = 500; // rows fetched per SELECT
-const WRITE_BATCH = 33;  // rows per CASE UPDATE (3 params/row → 99 params, under D1's 100-variable limit)
-
-async function d1(sql, params = []) {
-  const res = await fetch(`${BASE}/query`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${API_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sql, params }),
-  });
-  const data = await res.json();
-  if (!data.success) throw new Error(`D1 error: ${JSON.stringify(data.errors)}`);
-  return data.result[0];
-}
-
-// D1 REST API has no /batch endpoint — use a CASE expression to update N rows in one call.
 // Returns { updated, removed } counts for this sub-batch.
 async function processBatch(rows) {
   const inList = rows.map(() => '?').join(',');
@@ -107,8 +86,6 @@ export default async function run() {
                           row.season_num, row.episode_num, row.language, row.archive_md5),
     }));
 
-    // Process in sub-batches of WRITE_BATCH: each sub-batch = 3 REST API calls
-    // (1 CASE UPDATE + 1 SELECT for NULLs + 1 DELETE for duplicates)
     for (const batch of chunk(rows, WRITE_BATCH)) {
       const { updated: u, removed: r } = await processBatch(batch);
       updated += u;

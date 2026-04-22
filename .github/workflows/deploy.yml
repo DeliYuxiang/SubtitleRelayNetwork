@@ -17,13 +17,11 @@ on:
 #       │
 #   resolve-infra  ← reads Terraform state, surfaces resource IDs
 #       │
-#   deploy-or-bootstrap  ← maintenance ON + backup + SQL migrations apply
-#       │
-#   run-data-migrations  ← discovers migrations/*.mjs, runs each
+#   deploy-or-bootstrap  ← maintenance ON + backup + LOCAL migrations + import
 #       │
 #   finalize-deploy      ← wrangler deploy (maintenance OFF) + registry update
 #
-#   emergency-restore    ← runs on failure of any of the three deploy jobs
+#   emergency-restore    ← runs on failure of any deploy job
 # ---------------------------------------------------------------------------
 
 permissions:
@@ -41,7 +39,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install dependencies
         run: |
@@ -112,7 +110,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install dependencies
         run: |
@@ -179,72 +177,123 @@ jobs:
             printf '%s' "$TMDB_TOKEN" | npx wrangler secret put TMDB_TOKEN
           fi
 
-      - name: Maintenance Mode ON + Backup + SQL Migrations
+      - name: Maintenance Mode ON + Backup + Local Migrations + D1 Import
         id: pre_deploy
         if: steps.check_mode.outputs.mode == 'deploy'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_NON_INTERACTIVE: "true"
+          WRANGLER_LOG: warn
         run: |
           cd worker
 
-          # 1. Read previously deployed SHA and URL from R2 (written by Deploy Worker step)
-          npx wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt 2>/dev/null || true
+          # 1. Read previously deployed SHA from R2
+          npx wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt --remote 2>/dev/null || true
           SHORT_SHA=$(cat /tmp/deployed_sha.txt 2>/dev/null | tr -d '[:space:]')
-          if [ -z "$SHORT_SHA" ]; then
-            SHORT_SHA="initial"
-          fi
+          if [ -z "$SHORT_SHA" ]; then SHORT_SHA="initial"; fi
           echo "::notice::Currently deployed SHA: $SHORT_SHA"
 
-          # 1b. Check if server is already in maintenance mode.
-          npx wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt 2>/dev/null || true
+          # 1b. Check if server is already in maintenance mode
+          npx wrangler r2 object get "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt --remote 2>/dev/null || true
           LIVE_URL=$(cat /tmp/deployed_url.txt 2>/dev/null | tr -d '[:space:]')
           if [ -n "$LIVE_URL" ]; then
             HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$LIVE_URL/v1/health" 2>/dev/null || echo "000")
             if [ "$HTTP_STATUS" = "503" ]; then
-              echo "::error::Server is already in maintenance mode (HTTP 503). The previous deploy cycle may have crashed before rollback completed. Resolve manually before re-deploying."
+              echo "::error::Server is already in maintenance mode. Resolve manually."
               exit 1
             fi
-            echo "::notice::Server status: HTTP $HTTP_STATUS — proceeding."
           fi
 
           HEAD_SHA=$(git rev-parse --short HEAD)
           if [ "$SHORT_SHA" = "$HEAD_SHA" ]; then
-            echo "::notice::Live worker already at ${HEAD_SHA} — skipping backup and deploy."
+            echo "::notice::Live worker already at ${HEAD_SHA} — skipping."
             echo "skip=true" >> $GITHUB_OUTPUT
             exit 0
           fi
           echo "skip=false" >> $GITHUB_OUTPUT
 
           # 2. Enable Maintenance Mode
-          echo "::notice::Enabling Maintenance Mode before backup..."
+          echo "::notice::Enabling Maintenance Mode..."
           npx wrangler deploy --config wrangler.production.jsonc --var MAINTENANCE_MODE:true --var COMMIT_SHA:$SHORT_SHA
 
-          # 3. Backup D1, named after the currently deployed SHA
+          # 3. Backup production D1 to a file
           BACKUP_FILE="backup-$(date +%Y%m%d-%H%M%S)-$SHORT_SHA.sql"
-          echo "::notice::Backing up D1 to R2: $BACKUP_FILE"
-          npx wrangler d1 export "$SRN_D1_NAME" --remote --output "$BACKUP_FILE"
-
-          LOCAL_MD5=$(md5sum "$BACKUP_FILE" | awk '{ print $1 }')
-          echo "Local MD5: $LOCAL_MD5"
+          echo "::notice::Exporting production D1 to $BACKUP_FILE"
+          EXPORT_LOG=$(npx wrangler d1 export "$SRN_D1_NAME" --remote --output "$BACKUP_FILE" 2>&1) || { echo "$EXPORT_LOG"; exit 1; }
+          # Mask the pre-signed download URL — it grants temporary read access to production data.
+          PRESIGNED=$(printf '%s' "$EXPORT_LOG" | grep -oE 'https://[^ ]*r2\.cloudflarestorage\.com[^ ]*' | head -n 1)
+          [ -n "$PRESIGNED" ] && echo "::add-mask::$PRESIGNED"
+          printf '%s\n' "$EXPORT_LOG" | grep -v 'r2\.cloudflarestorage\.com'
           npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/$BACKUP_FILE" --file "$BACKUP_FILE" --remote
           echo "backup_file=$BACKUP_FILE" >> $GITHUB_OUTPUT
 
-          echo "::notice::Verifying R2 upload integrity..."
-          npx wrangler r2 object get "$SRN_BACKUP_R2_NAME/$BACKUP_FILE" --file "verify_$BACKUP_FILE" --remote
-          REMOTE_MD5=$(md5sum "verify_$BACKUP_FILE" | awk '{ print $1 }')
-          rm "verify_$BACKUP_FILE"
+          # 4. Local Migrations (SQL + Data) on the snapshot
+          # Use a lightweight SELECT to force wrangler to create the SQLite file
+          # without recording any migration state. Avoids a stale-state collision
+          # when migrations apply runs after seeding (which would otherwise see an
+          # external "all-applied" record and potentially recreate the schema).
+          #
+          # Snapshot existing files BEFORE wrangler init so we can diff afterwards
+          # to find the exact file Miniflare created for the DB binding.
+          # (The old `find *.sqlite | head -n 1` could pick metadata.sqlite or the
+          # wrong binding's hash — causing a "split brain" where Node scripts and
+          # wrangler operate on different files.)
+          echo "::notice::Initializing local D1..."
+          BEFORE=$(find .wrangler/state/v3/d1 -type f -name "*.sqlite" ! -name "metadata.sqlite" 2>/dev/null | sort || true)
+          npx wrangler d1 execute DB --local --command "SELECT 1" --config wrangler.test.jsonc > /dev/null
+          AFTER=$(find .wrangler/state/v3/d1 -type f -name "*.sqlite" ! -name "metadata.sqlite" 2>/dev/null | sort || true)
 
-          if [ "$LOCAL_MD5" == "$REMOTE_MD5" ]; then
-            echo "::notice::Integrity check passed (MD5: $LOCAL_MD5)"
-          else
-            echo "::error::MD5 Mismatch! Local: $LOCAL_MD5, Remote: $REMOTE_MD5. Backup might be corrupted."
+          # Identify the newly created file (diff between BEFORE and AFTER).
+          LOCAL_DB_PATH=$(comm -13 <(echo "$BEFORE") <(echo "$AFTER") | head -n 1)
+          # Fallback: if no diff (file already existed), use the only non-metadata file.
+          if [ -z "$LOCAL_DB_PATH" ]; then
+            LOCAL_DB_PATH=$(echo "$AFTER" | head -n 1)
+          fi
+          if [ -z "$LOCAL_DB_PATH" ]; then
+            echo "::error::Could not find local D1 SQLite file in .wrangler"
             exit 1
           fi
+          echo "::notice::Resolved local D1 path: $LOCAL_DB_PATH"
 
-          # 4. Apply SQL schema migrations
-          npx wrangler d1 migrations apply "$SRN_D1_NAME" --remote --config wrangler.production.jsonc
+          echo "::notice::Seeding local emulator from production snapshot..."
+          LOCAL_DB_PATH="$LOCAL_DB_PATH" BACKUP_FILE="$BACKUP_FILE" \
+            node data-migrations/seed-local.mjs
+
+          echo "::notice::Applying SQL migrations locally..."
+          npx wrangler d1 migrations apply DB --local --config wrangler.test.jsonc
+
+          echo "::notice::Running data migrations locally..."
+          LOCAL_DB_PATH="$LOCAL_DB_PATH" node data-migrations/run.mjs
+
+          # Give the OS a moment to flush any pending page-cache writes before
+          # wrangler's workerd opens the file for export.
+          sleep 1
+
+          # 5. Dump the migrated database
+          echo "::notice::Exporting migrated local database..."
+          npx wrangler d1 export DB --local --output /tmp/migrated.sql --config wrangler.test.jsonc
+
+          # 6. Clear remote D1 before import
+          echo "::notice::Clearing remote D1 tables..."
+          D1_API="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database/$SRN_D1_ID"
+          QUERY_OUT=$(curl -s "$D1_API/query" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"sql":"SELECT name FROM sqlite_master WHERE type=\u0027table\u0027 AND name NOT LIKE \u0027sqlite_%\u0027 AND name NOT LIKE \u0027_cf_%\u0027","params":[]}')
+          TABLES=$(echo "$QUERY_OUT" | jq -r '.result[0].results[] | .name')
+          if [ -n "$TABLES" ]; then
+            {
+              echo "PRAGMA foreign_keys=OFF;"
+              for t in $TABLES; do echo "DROP TABLE IF EXISTS \"$t\";"; done
+              echo "PRAGMA foreign_keys=ON;"
+            } > /tmp/reset.sql
+            npx wrangler d1 execute "$SRN_D1_NAME" --remote --file=/tmp/reset.sql --yes --config wrangler.production.jsonc
+          fi
+
+          # 7. Import to remote D1
+          echo "::notice::Importing migrated SQL into production D1..."
+          npx wrangler d1 execute "$SRN_D1_NAME" --remote --file=/tmp/migrated.sql --yes --config wrangler.production.jsonc
 
       - name: Upload Backup Artifact
         if: steps.pre_deploy.outputs.backup_file != ''
@@ -357,30 +406,12 @@ jobs:
           WRANGLER_NON_INTERACTIVE: "true"
 
   # -------------------------------------------------------------------------
-  # Phase 2: Run pending data migrations during the maintenance window.
-  # -------------------------------------------------------------------------
-  run-data-migrations:
-    needs: [resolve-infra, deploy-or-bootstrap]
-    if: |
-      needs.deploy-or-bootstrap.result == 'success' &&
-      needs.deploy-or-bootstrap.outputs.mode == 'deploy' &&
-      needs.deploy-or-bootstrap.outputs.skip != 'true'
-    uses: ./.github/workflows/run-migrations.yml
-    secrets: inherit
-    with:
-      d1_id: ${{ needs.resolve-infra.outputs.d1_id }}
-    permissions:
-      contents: write
-      packages: read
-
-  # -------------------------------------------------------------------------
   # Phase 3: Deploy updated worker (implicitly disables maintenance mode).
   # -------------------------------------------------------------------------
   finalize-deploy:
-    needs: [resolve-infra, deploy-or-bootstrap, run-data-migrations]
+    needs: [resolve-infra, deploy-or-bootstrap]
     if: |
       needs.deploy-or-bootstrap.result == 'success' &&
-      needs.run-data-migrations.result == 'success' &&
       needs.deploy-or-bootstrap.outputs.mode == 'deploy' &&
       needs.deploy-or-bootstrap.outputs.skip != 'true'
     runs-on: ubuntu-latest
@@ -402,7 +433,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install dependencies
         run: |
@@ -437,11 +468,11 @@ jobs:
           echo "$DEPLOY_OUTPUT"
 
           echo -n "$SHORT_SHA" > /tmp/deployed_sha.txt
-          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt
+          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt --remote
 
           DEPLOYED_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE "https://[a-zA-Z0-9.-]+\.workers\.dev" | head -n 1)
           echo -n "$DEPLOYED_URL" > /tmp/deployed_url.txt
-          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt
+          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-url.txt" --file /tmp/deployed_url.txt --remote
           echo "deployed_url=$DEPLOYED_URL" >> $GITHUB_OUTPUT
 
       - name: Cleanup provision branches
@@ -453,10 +484,10 @@ jobs:
           done
 
   # -------------------------------------------------------------------------
-  # Emergency restore: fires if ANY of the three deploy phases fail.
+  # Emergency restore: fires if ANY deploy phase fails.
   # -------------------------------------------------------------------------
   emergency-restore:
-    needs: [resolve-infra, deploy-or-bootstrap, run-data-migrations, finalize-deploy]
+    needs: [resolve-infra, deploy-or-bootstrap, finalize-deploy]
     if: |
       failure() &&
       needs.deploy-or-bootstrap.outputs.mode == 'deploy' &&
@@ -477,7 +508,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install dependencies
         run: |
@@ -492,9 +523,7 @@ jobs:
           SRN_POW_SECRET=$(openssl rand -hex 16) \
             .github/workflows/scripts/generate_wrangler_config.sh worker/wrangler.production.jsonc
 
-          DOB_FAILED="${{ needs.deploy-or-bootstrap.result == 'failure' }}"
-          DM_FAILED="${{ needs.run-data-migrations.result == 'failure' }}"
-          if [ "$DOB_FAILED" = "true" ] || [ "$DM_FAILED" = "true" ]; then
+          if [ "${{ needs.deploy-or-bootstrap.result == 'failure' }}" = "true" ]; then
             echo "db_touched=true" >> $GITHUB_OUTPUT
           else
             echo "db_touched=false" >> $GITHUB_OUTPUT
@@ -534,6 +563,24 @@ jobs:
               --file "$BACKUP_FILE" --remote --config wrangler.production.jsonc
           fi
 
+          # Clear all user tables before restoring — backup SQL uses CREATE TABLE without IF NOT EXISTS
+          echo "::notice::Clearing existing tables before restore..."
+          D1_API="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database/$SRN_D1_ID"
+          QUERY_OUT=$(curl -s "$D1_API/query" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"sql":"SELECT name FROM sqlite_master WHERE type=\u0027table\u0027 AND name NOT LIKE \u0027sqlite_%\u0027","params":[]}')
+          TABLES=$(echo "$QUERY_OUT" | jq -r '(.result[0].results // [])[] | .name | select(startswith("_cf_") | not)')
+          if [ -n "$TABLES" ]; then
+            {
+              echo "PRAGMA foreign_keys=OFF;"
+              for t in $TABLES; do echo "DROP TABLE IF EXISTS \"$t\";"; done
+              echo "PRAGMA foreign_keys=ON;"
+            } > /tmp/reset_db.sql
+            npx wrangler d1 execute "$SRN_D1_NAME" --remote --file=/tmp/reset_db.sql --yes \
+              --config wrangler.production.jsonc
+          fi
+
           echo "::warning::Restoring D1 from backup: $BACKUP_FILE"
           npx wrangler d1 execute "$SRN_D1_NAME" \
             --remote --file="$BACKUP_FILE" --yes --config wrangler.production.jsonc
@@ -544,6 +591,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          RELAY_PUBLIC_KEY: ${{ secrets.RELAY_PUBLIC_KEY }}
           WRANGLER_NON_INTERACTIVE: "true"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -551,7 +599,9 @@ jobs:
           PREV_SHA=$(echo "$BACKUP_FILE" | grep -oE "[a-f0-9]{7}" | tail -n 1)
           if [ -z "$PREV_SHA" ]; then
             echo "::error::Could not extract SHA from backup filename '$BACKUP_FILE'. Falling back to maintenance-off deploy."
-            cd worker && npx wrangler deploy --config wrangler.production.jsonc --var MAINTENANCE_MODE:false
+            cd worker && npx wrangler deploy --config wrangler.production.jsonc \
+              --var MAINTENANCE_MODE:false \
+              --var RELAY_PUBLIC_KEY:"$RELAY_PUBLIC_KEY"
             exit 0
           fi
 
@@ -559,19 +609,27 @@ jobs:
           git checkout "$PREV_SHA"
           cd worker
           npm ci
-          npx wrangler deploy --config wrangler.production.jsonc --var MAINTENANCE_MODE:false
+          npx wrangler deploy --config wrangler.production.jsonc \
+            --var MAINTENANCE_MODE:false \
+            --var COMMIT_SHA:"$PREV_SHA" \
+            --var RELAY_PUBLIC_KEY:"$RELAY_PUBLIC_KEY"
           echo -n "$PREV_SHA" > /tmp/deployed_sha.txt
-          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt
+          npx wrangler r2 object put "$SRN_BACKUP_R2_NAME/deployed-sha.txt" --file /tmp/deployed_sha.txt --remote
           echo "::notice::Emergency rollback complete — live at $PREV_SHA, DB restored from $BACKUP_FILE"
 
-      # --- Path B: Only finalize-deploy failed → DB is clean, just turn maintenance off ---
+      # --- Path B: Only finalize-deploy failed → DB is migrated, deploy HEAD with maintenance off ---
       - name: Disable Maintenance Mode (no DB changes)
         if: steps.configure.outputs.db_touched == 'false'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          RELAY_PUBLIC_KEY: ${{ secrets.RELAY_PUBLIC_KEY }}
           WRANGLER_NON_INTERACTIVE: "true"
         run: |
           cd worker
+          SHORT_SHA=$(git rev-parse --short HEAD)
           echo "::warning::Deployment failed after DB migration. Forcing maintenance mode OFF..."
-          npx wrangler deploy --config wrangler.production.jsonc --var MAINTENANCE_MODE:false
+          npx wrangler deploy --config wrangler.production.jsonc \
+            --var MAINTENANCE_MODE:false \
+            --var COMMIT_SHA:"$SHORT_SHA" \
+            --var RELAY_PUBLIC_KEY:"$RELAY_PUBLIC_KEY"

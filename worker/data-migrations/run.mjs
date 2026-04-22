@@ -6,36 +6,18 @@
 // filename-sorted order. Records each completion in _srn_migrations before
 // moving to the next migration.
 //
-// Required env vars:
-//   CLOUDFLARE_ACCOUNT_ID
-//   CLOUDFLARE_API_TOKEN
-//   SRN_D1_ID
+// Data migrations always run locally against a SQLite snapshot — never directly
+// against the remote D1. The CI pipeline exports prod → migrates locally →
+// clears remote → imports the migrated snapshot.
+//
+// Required env var:
+//   LOCAL_DB_PATH   path to the wrangler local D1 SQLite file
+//                   e.g. .wrangler/state/v3/d1/miniflare-D1DatabaseObject/<hash>/db.sqlite
 
 import { readdir } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
-
-const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
-const API_TOKEN  = process.env.CLOUDFLARE_API_TOKEN;
-const DB_ID      = process.env.SRN_D1_ID;
-
-if (!ACCOUNT_ID || !API_TOKEN || !DB_ID) {
-  console.error('Missing required env vars: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, SRN_D1_ID');
-  process.exit(1);
-}
-
-const BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/d1/database/${DB_ID}`;
-
-async function d1(sql, params = []) {
-  const res = await fetch(`${BASE}/query`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${API_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sql, params }),
-  });
-  const data = await res.json();
-  if (!data.success) throw new Error(`D1 error: ${JSON.stringify(data.errors)}`);
-  return data.result[0];
-}
+import { d1, checkpoint } from './lib.mjs';
 
 async function getCompletedMigrations() {
   try {
@@ -58,7 +40,7 @@ async function markComplete(name) {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const files = (await readdir(__dirname))
-  .filter(f => f.endsWith('.mjs') && f !== 'run.mjs')
+  .filter(f => f.endsWith('.mjs') && f !== 'run.mjs' && f !== 'lib.mjs' && f !== 'seed-local.mjs')
   .sort();
 
 if (files.length === 0) {
@@ -91,4 +73,8 @@ for (const file of pending) {
   console.log(`✓ ${file} complete`);
 }
 
+// Flush WAL to the main db file so that subsequent wrangler d1 export --local
+// (which reads via workerd/direct I/O, bypassing the OS page cache) sees all
+// data written by the migrations above.
+checkpoint();
 console.log('\nAll pending migrations complete.');

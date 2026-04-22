@@ -98,14 +98,14 @@ async function caseUpdate(table, col, pairs) {
 //
 // INSERT uses 2 params/row (v2_id + v1_id); 33 rows × 2 = 66 params, under the 100-var limit.
 async function processSubBatch(pairs) {
-  // Phase 1: insert V2 events
-  const unionParts = pairs.map(() =>
-    'SELECT ? AS id, pubkey, kind, content_md5, tags, sig, created_at FROM events WHERE id = ?'
-  ).join(' UNION ALL ');
-  await d1(
-    `INSERT OR IGNORE INTO events (id, pubkey, kind, content_md5, tags, sig, created_at) ${unionParts}`,
-    pairs.flatMap(([v1, v2]) => [v2, v1]),
-  );
+  // Phase 1: insert V2 events one row at a time.
+  // UNION ALL SELECT was attempted but D1 has a low limit on compound SELECT terms.
+  for (const [v1, v2] of pairs) {
+    await d1(
+      'INSERT OR IGNORE INTO events (id, pubkey, kind, content_md5, tags, sig, created_at) SELECT ? AS id, pubkey, kind, content_md5, tags, sig, created_at FROM events WHERE id = ?',
+      [v2, v1],
+    );
+  }
 
   // Phase 2: update child tables (V2 now in events → FK satisfied)
   await caseUpdate('event_metadata',   'event_id',       pairs);

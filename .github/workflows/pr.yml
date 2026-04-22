@@ -133,7 +133,7 @@ jobs:
           echo "Initializing local D1..."
           npx wrangler d1 execute DB --local --command "SELECT 1" --config wrangler.test.jsonc > /dev/null
 
-          LOCAL_DB_PATH=$(find .wrangler/state/v3/d1 -type f -name "db.sqlite" | head -n 1)
+          LOCAL_DB_PATH=$(find .wrangler/state/v3/d1 -type f -name "*.sqlite" | head -n 1)
           if [ -z "$LOCAL_DB_PATH" ]; then
             echo "::error::Could not find local SQLite file in .wrangler"
             exit 1

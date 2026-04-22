@@ -56,15 +56,24 @@ function chunk(arr, size) {
   return out;
 }
 
-// CASE-based UPDATE for a single column. 3 vars/row (WHEN v1 THEN v2 + WHERE IN v1).
+// CASE-based UPDATE OR IGNORE for a single column, followed by a DELETE to clean up
+// any V1 refs that could not be renamed because the V2 value already existed.
+//
+// UPDATE OR IGNORE: rename V1→V2; skip (no-op) rows where the new value would
+// violate a UNIQUE/PK constraint (i.e. V2 already exists).
+// DELETE: remove V1 rows that were skipped — their V2 counterpart already holds the
+// canonical data, so the V1 row is redundant.
+// Rows that were successfully renamed now have col=V2, so the DELETE is a no-op for them.
 async function caseUpdate(table, col, pairs) {
   if (pairs.length === 0) return;
   const caseWhen = pairs.map(() => 'WHEN ? THEN ?').join(' ');
   const inList = pairs.map(() => '?').join(',');
+  const v1s = pairs.map(([v1]) => v1);
   await d1(
-    `UPDATE ${table} SET ${col} = CASE ${col} ${caseWhen} END WHERE ${col} IN (${inList})`,
-    [...pairs.flatMap(([v1, v2]) => [v1, v2]), ...pairs.map(([v1]) => v1)],
+    `UPDATE OR IGNORE ${table} SET ${col} = CASE ${col} ${caseWhen} END WHERE ${col} IN (${inList})`,
+    [...pairs.flatMap(([v1, v2]) => [v1, v2]), ...v1s],
   );
+  await d1(`DELETE FROM ${table} WHERE ${col} IN (${inList})`, v1s);
 }
 
 // ─── Main migration ───────────────────────────────────────────────────────────
@@ -97,21 +106,29 @@ export default async function run() {
     await d1('BEGIN');
 
     for (const sub of chunk(pairs, SUB_BATCH)) {
-      // Direct primary key update — safe with FK off.
       const caseWhen = sub.map(() => 'WHEN ? THEN ?').join(' ');
-      const inList = sub.map(() => '?').join(',');
+      const inList   = sub.map(() => '?').join(',');
+      const v1s      = sub.map(([v1]) => v1);
+
+      // Rename V1→V2. OR IGNORE skips rows where V2 already exists (new clients may
+      // have already inserted events with V2 IDs). Those V1 rows are cleaned up below.
       await d1(
-        `UPDATE events SET id = CASE id ${caseWhen} END WHERE id IN (${inList})`,
-        [...sub.flatMap(([v1, v2]) => [v1, v2]), ...sub.map(([v1]) => v1)],
+        `UPDATE OR IGNORE events SET id = CASE id ${caseWhen} END WHERE id IN (${inList})`,
+        [...sub.flatMap(([v1, v2]) => [v1, v2]), ...v1s],
       );
 
-      // Update child tables while both V1 and V2 IDs exist in the same transaction.
+      // Update child tables. caseUpdate uses UPDATE OR IGNORE + DELETE so that child
+      // rows tied to a pre-existing V2 event are removed rather than left as orphans.
       await caseUpdate('event_metadata',  'event_id',       sub);
       await caseUpdate('event_tags',      'event_id',       sub);
       await caseUpdate('event_sources',   'event_id',       sub);
       await caseUpdate('event_lifecycle', 'event_id',       sub);
       await caseUpdate('event_lifecycle', 'deactivated_by', sub);
       await caseUpdate('event_keys',      'event_id',       sub);
+
+      // Delete any V1 events whose rename was skipped (V2 already existed).
+      // Rows that were successfully renamed now have id=V2, so this DELETE is a no-op for them.
+      await d1(`DELETE FROM events WHERE id IN (${inList})`, v1s);
     }
 
     await d1('COMMIT');

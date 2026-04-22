@@ -1,0 +1,33 @@
+name: Update @srn/client
+
+on:
+  repository_dispatch:
+    types: [srnrelay-updated]
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Update @srn/client to ${{ github.event.client_payload.version }}
+        run: |
+          VERSION="${{ github.event.client_payload.version }}"
+          # Strip leading 'v' prefix
+          VERSION="${VERSION#v}"
+          cd worker
+          npm install @srn/client@"npm:@deliyuxiang/srn-client@${VERSION}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add worker/package.json worker/package-lock.json
+          git diff --staged --quiet || git commit -m "chore: bump @srn/client to ${{ github.event.client_payload.version }}"
+          git push

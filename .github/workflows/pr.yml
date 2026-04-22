@@ -23,6 +23,8 @@ jobs:
 
       - name: Install dependencies
         run: cd worker && npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Format Check
         run: cd worker && npm run format:check
@@ -94,6 +96,8 @@ jobs:
 
       - name: Install dependencies
         run: cd worker && npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Detect migration changes
         id: detect_migrations

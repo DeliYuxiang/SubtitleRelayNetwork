@@ -39,6 +39,8 @@ jobs:
 
       - name: Install Wrangler
         run: cd worker && npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Identify and Download Backup
         id: fetch_backup
@@ -91,3 +93,4 @@ jobs:
           echo "::notice::Code successfully rolled back to $PREV_SHA"
         env:
           WRANGLER_NON_INTERACTIVE: "true"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

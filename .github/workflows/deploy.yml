@@ -43,6 +43,8 @@ jobs:
         run: |
           cd worker
           npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Format Check
         run: cd worker && npm run format:check
@@ -111,6 +113,8 @@ jobs:
         run: |
           cd worker
           npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Determine Deploy Mode
         id: check_mode
@@ -397,6 +401,8 @@ jobs:
         run: |
           cd worker
           npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate wrangler production config
         run: |
@@ -470,6 +476,8 @@ jobs:
         run: |
           cd worker
           npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate wrangler production config
         id: configure
@@ -530,6 +538,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_NON_INTERACTIVE: "true"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BACKUP_FILE="${{ needs.deploy-or-bootstrap.outputs.backup_file }}"
           PREV_SHA=$(echo "$BACKUP_FILE" | grep -oE "[a-f0-9]{7}" | tail -n 1)

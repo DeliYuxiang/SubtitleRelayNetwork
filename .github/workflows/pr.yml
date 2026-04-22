@@ -108,7 +108,7 @@ jobs:
         id: detect_migrations
         run: |
           git fetch origin ${{ github.base_ref }} --depth=1
-          CHANGED=$(git diff --name-only origin/${{ github.base_ref }} HEAD -- worker/migrations/ | wc -l)
+          CHANGED=$(git diff --name-only origin/${{ github.base_ref }} HEAD -- worker/migrations/ worker/data-migrations/ | wc -l)
           echo "has_migrations=$([ "$CHANGED" -gt 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
 
       - name: Seed preview D1 from production

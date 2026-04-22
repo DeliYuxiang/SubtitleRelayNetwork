@@ -41,7 +41,7 @@ async function markComplete(name) {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const files = (await readdir(__dirname))
-  .filter(f => f.endsWith('.mjs') && f !== 'run.mjs' && f !== 'lib.mjs')
+  .filter(f => f.endsWith('.mjs') && f !== 'run.mjs' && f !== 'lib.mjs' && f !== 'seed-local.mjs')
   .sort();
 
 if (files.length === 0) {

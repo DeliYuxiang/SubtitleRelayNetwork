@@ -13,8 +13,8 @@
 import { createHash } from 'node:crypto';
 import { d1 } from './lib.mjs';
 
-const BATCH_SIZE  = 500; // rows fetched per SELECT
-const WRITE_BATCH = 33;  // rows per CASE UPDATE (3 params/row → 99 params, under D1's 100-variable limit)
+const BATCH_SIZE  = 5000; // rows fetched per SELECT
+const WRITE_BATCH = 300;  // rows per CASE UPDATE (3 params/row × 300 = 900, under SQLite's 999-variable limit)
 
 // Returns { updated, removed } counts for this sub-batch.
 async function processBatch(rows) {
@@ -86,8 +86,6 @@ export default async function run() {
                           row.season_num, row.episode_num, row.language, row.archive_md5),
     }));
 
-    // Process in sub-batches of WRITE_BATCH: each sub-batch = 3 REST API calls
-    // (1 CASE UPDATE + 1 SELECT for NULLs + 1 DELETE for duplicates)
     for (const batch of chunk(rows, WRITE_BATCH)) {
       const { updated: u, removed: r } = await processBatch(batch);
       updated += u;

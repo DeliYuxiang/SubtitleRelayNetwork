@@ -130,14 +130,28 @@ jobs:
           # without recording any migration state. Avoids a stale-state collision
           # when migrations apply runs after seeding (which would otherwise see an
           # external "all-applied" record and potentially recreate the schema).
+          #
+          # Snapshot existing files BEFORE wrangler init so we can diff afterwards
+          # to find the exact file Miniflare created for the DB binding.
+          # (The old `find *.sqlite | head -n 1` could pick metadata.sqlite or the
+          # wrong binding's hash — causing a "split brain" where Node scripts and
+          # wrangler operate on different files.)
           echo "Initializing local D1..."
+          BEFORE=$(find .wrangler/state/v3/d1 -type f -name "*.sqlite" ! -name "metadata.sqlite" 2>/dev/null | sort || true)
           npx wrangler d1 execute DB --local --command "SELECT 1" --config wrangler.test.jsonc > /dev/null
+          AFTER=$(find .wrangler/state/v3/d1 -type f -name "*.sqlite" ! -name "metadata.sqlite" 2>/dev/null | sort || true)
 
-          LOCAL_DB_PATH=$(find .wrangler/state/v3/d1 -type f -name "*.sqlite" | head -n 1)
+          # Identify the newly created file (diff between BEFORE and AFTER).
+          LOCAL_DB_PATH=$(comm -13 <(echo "$BEFORE") <(echo "$AFTER") | head -n 1)
+          # Fallback: if no diff (file already existed), use the only non-metadata file.
           if [ -z "$LOCAL_DB_PATH" ]; then
-            echo "::error::Could not find local SQLite file in .wrangler"
+            LOCAL_DB_PATH=$(echo "$AFTER" | head -n 1)
+          fi
+          if [ -z "$LOCAL_DB_PATH" ]; then
+            echo "::error::Could not find local D1 SQLite file in .wrangler"
             exit 1
           fi
+          echo "Resolved local D1 path: $LOCAL_DB_PATH"
 
           echo "Seeding local emulator from production snapshot..."
           LOCAL_DB_PATH="$LOCAL_DB_PATH" BACKUP_FILE=/tmp/prod.sql \

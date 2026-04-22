@@ -47,6 +47,16 @@ else
     npx wrangler d1 migrations apply DB --local -c wrangler.test.jsonc
 fi
 
+# Run data migrations against the local SQLite (idempotent — skips already-run migrations).
+# When pulling from remote the _srn_migrations table comes with the dump, so this is a no-op.
+LOCAL_DB=$(find .wrangler/state/v3/d1 -name 'db.sqlite' 2>/dev/null | head -1)
+if [ -n "$LOCAL_DB" ]; then
+    echo "🗃️  Running data migrations against local DB..."
+    LOCAL_DB_PATH="$LOCAL_DB" node data-migrations/run.mjs
+else
+    echo "⚠️  Local D1 SQLite not found — skipping data migrations"
+fi
+
 # Start wrangler dev with the test configuration
 echo "🚀 Starting worker in local development mode..."
 npx wrangler dev -c wrangler.test.jsonc --persist

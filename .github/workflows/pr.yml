@@ -23,7 +23,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install dependencies
         run: cd worker && npm ci
@@ -97,7 +97,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install dependencies
         run: cd worker && npm ci
@@ -111,23 +111,42 @@ jobs:
           CHANGED=$(git diff --name-only origin/${{ github.base_ref }} HEAD -- worker/migrations/ worker/data-migrations/ | wc -l)
           echo "has_migrations=$([ "$CHANGED" -gt 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
 
-      - name: Seed preview D1 from production
+      - name: Seed preview D1 from production (with local migrations)
         if: steps.detect_migrations.outputs.has_migrations == 'true' && needs.resolve-prod-infra.outputs.infra_exists == 'true'
         run: |
           cd worker
 
-          # Export production D1 to a SQL dump
+          # 1. Export production D1 to a SQL dump
           echo "Exporting production D1 ($PROD_D1_NAME)..."
-          npx wrangler d1 export "$PROD_D1_NAME" --remote --output /tmp/prod-dump.sql
+          npx wrangler d1 export "$PROD_D1_NAME" --remote --output /tmp/prod.sql
 
-          # Clear preview D1: query sqlite_master, drop all user tables
+          # 2. Local Migrations (SQL + Data) on the snapshot
+          echo "Seeding local emulator from production snapshot..."
+          npx wrangler d1 execute DB --local --file=/tmp/prod.sql --config wrangler.test.jsonc
+
+          echo "Applying SQL migrations locally..."
+          npx wrangler d1 migrations apply DB --local --config wrangler.test.jsonc
+
+          echo "Running data migrations locally..."
+          LOCAL_DB_PATH=$(find .wrangler/state/v3/d1 -name "*.sqlite" | head -n 1)
+          if [ -z "$LOCAL_DB_PATH" ]; then
+            echo "::error::Could not find local SQLite file in .wrangler"
+            exit 1
+          fi
+          LOCAL_DB_PATH="$LOCAL_DB_PATH" node data-migrations/run.mjs
+
+          # 3. Export migrated database
+          echo "Exporting migrated local database..."
+          npx wrangler d1 export DB --local --output /tmp/migrated.sql --config wrangler.test.jsonc
+
+          # 4. Clear preview D1 before import
           echo "Clearing preview D1 ($PREVIEW_D1_NAME)..."
           D1_API="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database/$PREVIEW_D1_ID"
           QUERY_OUT=$(curl -s "$D1_API/query" \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             -H "Content-Type: application/json" \
-            -d '{"sql":"SELECT name FROM sqlite_master WHERE type=\u0027table\u0027 AND name NOT LIKE \u0027sqlite_%\u0027","params":[]}')
-          TABLES=$(echo "$QUERY_OUT" | jq -r '(.result[0].results // [])[] | .name | select(startswith("_cf_") | not)')
+            -d '{"sql":"SELECT name FROM sqlite_master WHERE type=\u0027table\u0027 AND name NOT LIKE \u0027sqlite_%\u0027 AND name NOT LIKE \u0027_cf_%\u0027","params":[]}')
+          TABLES=$(echo "$QUERY_OUT" | jq -r '.result[0].results[] | .name')
           if [ -n "$TABLES" ]; then
             {
               echo "PRAGMA foreign_keys=OFF;"
@@ -137,10 +156,10 @@ jobs:
             npx wrangler d1 execute "$PREVIEW_D1_NAME" --remote --file=/tmp/reset_preview.sql --yes
           fi
 
-          # Import production dump into preview D1
-          echo "Importing production dump into preview D1..."
-          npx wrangler d1 execute "$PREVIEW_D1_NAME" --remote --file=/tmp/prod-dump.sql --yes
-          echo "Preview D1 seeded from production."
+          # 5. Import production dump into preview D1
+          echo "Importing migrated SQL into preview D1..."
+          npx wrangler d1 execute "$PREVIEW_D1_NAME" --remote --file=/tmp/migrated.sql --yes
+          echo "Preview D1 seeded and migrated."
 
       - name: Generate wrangler preview config
         run: |
@@ -155,17 +174,11 @@ jobs:
           CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
           FRONTEND_URL: ${{ secrets.FRONTEND_URL }}
 
-      - name: Apply preview schema migrations
+      - name: Apply preview schema migrations (catch-all)
         run: |
           cd worker
           npx wrangler d1 migrations apply "$PREVIEW_D1_NAME" \
             --remote --config wrangler.preview.jsonc
-
-      - name: Run pending data migrations
-        if: steps.detect_migrations.outputs.has_migrations == 'true'
-        run: node worker/data-migrations/run.mjs
-        env:
-          SRN_D1_ID: ${{ needs.resolve-infra.outputs.d1_id }}
 
       - name: Generate preview relay keypair
         id: keygen

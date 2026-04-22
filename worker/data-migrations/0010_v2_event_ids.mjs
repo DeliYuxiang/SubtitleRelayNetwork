@@ -26,30 +26,11 @@
 //   - Idempotent: only selects WHERE LENGTH(id) = 32 (V1 IDs), so re-running is safe.
 
 import { createHash } from 'node:crypto';
+import { d1 } from './lib.mjs';
 
-const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
-const API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
-const DB_ID = process.env.SRN_D1_ID;
-
-if (!ACCOUNT_ID || !API_TOKEN || !DB_ID) {
-  console.error('Missing required env vars: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, SRN_D1_ID');
-  process.exit(1);
-}
-
-const BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/d1/database/${DB_ID}`;
 const BATCH_SIZE = 500;  // rows fetched per SELECT
-const SUB_BATCH = 33;   // rows per CASE UPDATE (3 vars/row × 33 = 99, under D1's 100-var limit)
-
-async function d1(sql, params = []) {
-  const res = await fetch(`${BASE}/query`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${API_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sql, params }),
-  });
-  const data = await res.json();
-  if (!data.success) throw new Error(`D1 error: ${JSON.stringify(data.errors)}\nSQL: ${sql}`);
-  return data.result[0];
-}
+const SUB_BATCH = 33;    // rows per CASE UPDATE (3 vars/row × 33 = 99, under D1's 100-var limit)
+const CONCURRENT = 5;    // sub-batches processed in parallel
 
 // ─── Canonical ID computation ────────────────────────────────────────────────
 // Must match Go ComputeIDV2() and TS computeID() exactly.
@@ -98,22 +79,25 @@ async function caseUpdate(table, col, pairs) {
 //
 // INSERT uses 2 params/row (v2_id + v1_id); 33 rows × 2 = 66 params, under the 100-var limit.
 async function processSubBatch(pairs) {
-  // Phase 1: insert V2 events one row at a time.
-  // UNION ALL SELECT was attempted but D1 has a low limit on compound SELECT terms.
-  for (const [v1, v2] of pairs) {
-    await d1(
+  // Phase 1: insert V2 events — fire all INSERTs concurrently.
+  // UNION ALL SELECT exceeded D1's compound SELECT term limit, so we use per-row INSERT.
+  // Promise.all turns 33 sequential round-trips (~5s) into ~1 round-trip (~150ms).
+  await Promise.all(pairs.map(([v1, v2]) =>
+    d1(
       'INSERT OR IGNORE INTO events (id, pubkey, kind, content_md5, tags, sig, created_at) SELECT ? AS id, pubkey, kind, content_md5, tags, sig, created_at FROM events WHERE id = ?',
       [v2, v1],
-    );
-  }
+    )
+  ));
 
-  // Phase 2: update child tables (V2 now in events → FK satisfied)
-  await caseUpdate('event_metadata',   'event_id',       pairs);
-  await caseUpdate('event_tags',       'event_id',       pairs);
-  await caseUpdate('event_sources',    'event_id',       pairs);
-  await caseUpdate('event_lifecycle',  'event_id',       pairs);
-  await caseUpdate('event_lifecycle',  'deactivated_by', pairs);
-  await caseUpdate('event_keys',       'event_id',       pairs);
+  // Phase 2: update child tables concurrently (V2 now in events → FK satisfied)
+  await Promise.all([
+    caseUpdate('event_metadata',   'event_id',       pairs),
+    caseUpdate('event_tags',       'event_id',       pairs),
+    caseUpdate('event_sources',    'event_id',       pairs),
+    caseUpdate('event_lifecycle',  'event_id',       pairs),
+    caseUpdate('event_lifecycle',  'deactivated_by', pairs),
+    caseUpdate('event_keys',       'event_id',       pairs),
+  ]);
 
   // Phase 3: delete old V1 events (no child rows reference V1 anymore → FK satisfied)
   const inList = pairs.map(() => '?').join(',');
@@ -151,10 +135,11 @@ export default async function run() {
       return true;
     });
 
-    // Process in sub-batches of SUB_BATCH rows (D1 100-var limit).
-    for (const sub of chunk(safePairs, SUB_BATCH)) {
-      await processSubBatch(sub);
-      totalMigrated += sub.length;
+    // Process sub-batches CONCURRENT at a time to reduce total wall-clock time.
+    const subBatches = chunk(safePairs, SUB_BATCH);
+    for (const group of chunk(subBatches, CONCURRENT)) {
+      await Promise.all(group.map(sub => processSubBatch(sub)));
+      totalMigrated += group.reduce((s, sub) => s + sub.length, 0);
     }
 
     console.log(`  Batch ${outerIter}: migrated ${results.length} events (total: ${totalMigrated})`);

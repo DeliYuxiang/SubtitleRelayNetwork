@@ -115,15 +115,20 @@ if [ -z "$COMMIT_SHA" ]; then
   exit 0
 fi
 
-git stash push --include-untracked -m "manual-rollback-tmp" 2>/dev/null || true
-git checkout "$COMMIT_SHA"
-cd "$REPO_ROOT/worker"
-npm install --silent
+# Create an isolated worktree at the rollback commit — leaves the current working tree untouched.
+ROLLBACK_WORKTREE=$(mktemp -d)
+rmdir "$ROLLBACK_WORKTREE"
+git worktree add "$ROLLBACK_WORKTREE" "$COMMIT_SHA"
+trap 'rm -f "$WRANGLER_TMP"; git worktree remove --force "$ROLLBACK_WORKTREE" 2>/dev/null || rm -rf "$ROLLBACK_WORKTREE"' EXIT
 
-# Reuse the config generated at the start of this script ($WRANGLER_TMP already exists).
-# Do NOT call generate_wrangler_config.sh here — after git checkout, that file may not
-# exist at the target commit. The config values (D1/R2 IDs) are stable across versions.
-"$WRANGLER" deploy --config "$WRANGLER_TMP" \
+# Regenerate config inside the worktree's worker/ dir so wrangler can resolve src/index.ts.
+ROLLBACK_CFG="$ROLLBACK_WORKTREE/worker/wrangler.production.jsonc"
+SRN_POW_SECRET=$(openssl rand -hex 16) \
+  "$REPO_ROOT/.github/workflows/scripts/generate_wrangler_config.sh" "$ROLLBACK_CFG"
+
+cd "$ROLLBACK_WORKTREE/worker"
+npm install --silent
+node_modules/.bin/wrangler deploy --config "$ROLLBACK_CFG" \
   --var MAINTENANCE_MODE:false \
   --var COMMIT_SHA:"$COMMIT_SHA" \
   --var RELAY_PUBLIC_KEY:"$RELAY_PUBLIC_KEY"

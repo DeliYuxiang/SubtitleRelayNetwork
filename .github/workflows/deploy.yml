@@ -224,12 +224,14 @@ jobs:
           echo "backup_file=$BACKUP_FILE" >> $GITHUB_OUTPUT
 
           # 4. Local Migrations (SQL + Data) on the snapshot
-          # wrangler d1 execute --local hangs on large SQL files; we bootstrap the
-          # local DB path with migrations apply, then seed via node:sqlite directly.
+          # Use a lightweight SELECT to force wrangler to create the SQLite file
+          # without recording any migration state. Avoids a stale-state collision
+          # when migrations apply runs after seeding (which would otherwise see an
+          # external "all-applied" record and potentially recreate the schema).
           echo "::notice::Initializing local D1..."
-          npx wrangler d1 migrations apply DB --local --config wrangler.test.jsonc
+          npx wrangler d1 execute DB --local --command "SELECT 1" --config wrangler.test.jsonc > /dev/null
 
-          LOCAL_DB_PATH=$(find .wrangler/state/v3/d1 -name "*.sqlite" | head -n 1)
+          LOCAL_DB_PATH=$(find .wrangler/state/v3/d1 -type f -name "db.sqlite" | head -n 1)
           if [ -z "$LOCAL_DB_PATH" ]; then
             echo "::error::Could not find local SQLite file in .wrangler"
             exit 1
@@ -244,6 +246,10 @@ jobs:
 
           echo "::notice::Running data migrations locally..."
           LOCAL_DB_PATH="$LOCAL_DB_PATH" node data-migrations/run.mjs
+
+          # Give the OS a moment to flush any pending page-cache writes before
+          # wrangler's workerd opens the file for export.
+          sleep 1
 
           # 5. Dump the migrated database
           echo "::notice::Exporting migrated local database..."

@@ -18,25 +18,27 @@
 //   event_keys.event_id              — FK
 //
 // D1 notes:
-//   - No batch endpoint; each UPDATE is a separate REST call.
-//   - 100-variable limit per query; 3 vars/row (2 CASE + 1 WHERE-IN) → 33 rows/sub-batch.
-//   - D1 does not enforce FK constraints, so cross-table consistency is purely our concern.
+//   - No /batch endpoint (returns "Route not found"); each statement is a separate /query call.
+//   - PRAGMA foreign_keys = OFF does not persist across /query calls (stateless connections).
+//   - D1 enforces FK constraints; direct UPDATE of events.id fails with FK constraint error.
+//   - Strategy: INSERT V2 events → UPDATE child tables → DELETE V1 events (avoids FK issues).
+//   - 100-variable limit per query; INSERT uses 2 vars/row → 33 rows/sub-batch = 66 vars.
 //   - Idempotent: only selects WHERE LENGTH(id) = 32 (V1 IDs), so re-running is safe.
 
 import { createHash } from 'node:crypto';
 
 const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
-const API_TOKEN  = process.env.CLOUDFLARE_API_TOKEN;
-const DB_ID      = process.env.SRN_D1_ID;
+const API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
+const DB_ID = process.env.SRN_D1_ID;
 
 if (!ACCOUNT_ID || !API_TOKEN || !DB_ID) {
   console.error('Missing required env vars: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, SRN_D1_ID');
   process.exit(1);
 }
 
-const BASE       = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/d1/database/${DB_ID}`;
+const BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/d1/database/${DB_ID}`;
 const BATCH_SIZE = 500;  // rows fetched per SELECT
-const SUB_BATCH  = 33;   // rows per CASE UPDATE (3 vars/row × 33 = 99, under D1's 100-var limit)
+const SUB_BATCH = 33;   // rows per CASE UPDATE (3 vars/row × 33 = 99, under D1's 100-var limit)
 
 async function d1(sql, params = []) {
   const res = await fetch(`${BASE}/query`, {
@@ -73,30 +75,49 @@ function chunk(arr, size) {
   return out;
 }
 
-// Build a CASE-based UPDATE for `table.col` in one REST call.
-// Skips the call entirely if there are no rows to update.
+// Build a CASE-based UPDATE for `table.col` in one /query call.
+// 3 vars/row (WHEN v1 THEN v2 + WHERE IN v1) × 33 rows = 99 vars, under D1's 100-var limit.
 async function caseUpdate(table, col, pairs) {
-  if (pairs.length === 0) return 0;
-  const inList  = pairs.map(() => '?').join(',');
+  if (pairs.length === 0) return;
   const caseWhen = pairs.map(() => 'WHEN ? THEN ?').join(' ');
-  const result = await d1(
+  const inList = pairs.map(() => '?').join(',');
+  await d1(
     `UPDATE ${table} SET ${col} = CASE ${col} ${caseWhen} END WHERE ${col} IN (${inList})`,
     [...pairs.flatMap(([v1, v2]) => [v1, v2]), ...pairs.map(([v1]) => v1)],
   );
-  return result?.meta?.changes ?? 0;
 }
 
-// Process a sub-batch: update all 7 columns that hold an event ID.
+// Process a sub-batch using INSERT + UPDATE child tables + DELETE — three /query calls per table.
+//
+// D1 enforces FK constraints and has no /batch endpoint, so we cannot disable FK enforcement
+// for the duration of the UPDATE. Instead:
+//   1. INSERT OR IGNORE new events with V2 IDs (UNION ALL SELECT from V1 rows).
+//      Both V1 and V2 now exist in events → child table UPDATEs will satisfy FK.
+//   2. UPDATE all child tables to reference V2 IDs.
+//   3. DELETE old V1 event rows (child tables no longer reference V1 → FK satisfied).
+//
+// INSERT uses 2 params/row (v2_id + v1_id); 33 rows × 2 = 66 params, under the 100-var limit.
 async function processSubBatch(pairs) {
-  // events.id first — other tables' FKs reference this.
-  // SQLite allows updating TEXT PRIMARY KEY values directly.
-  await caseUpdate('events',           'id',             pairs);
+  // Phase 1: insert V2 events
+  const unionParts = pairs.map(() =>
+    'SELECT ? AS id, pubkey, kind, content_md5, tags, sig, created_at FROM events WHERE id = ?'
+  ).join(' UNION ALL ');
+  await d1(
+    `INSERT OR IGNORE INTO events (id, pubkey, kind, content_md5, tags, sig, created_at) ${unionParts}`,
+    pairs.flatMap(([v1, v2]) => [v2, v1]),
+  );
+
+  // Phase 2: update child tables (V2 now in events → FK satisfied)
   await caseUpdate('event_metadata',   'event_id',       pairs);
   await caseUpdate('event_tags',       'event_id',       pairs);
   await caseUpdate('event_sources',    'event_id',       pairs);
   await caseUpdate('event_lifecycle',  'event_id',       pairs);
   await caseUpdate('event_lifecycle',  'deactivated_by', pairs);
   await caseUpdate('event_keys',       'event_id',       pairs);
+
+  // Phase 3: delete old V1 events (no child rows reference V1 anymore → FK satisfied)
+  const inList = pairs.map(() => '?').join(',');
+  await d1(`DELETE FROM events WHERE id IN (${inList})`, pairs.map(([v1]) => v1));
 }
 
 // ─── Main migration ───────────────────────────────────────────────────────────

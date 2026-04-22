@@ -117,6 +117,7 @@ jobs:
           B2_APPLICATION_KEY_ID: ${{ secrets.B2_MASTER_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_MASTER_APP_KEY }}
           WRANGLER_NON_INTERACTIVE: "true"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           B2_KEY_ID=$(terraform output -raw b2_worker_key_id 2>/dev/null || echo "")
           B2_APP_KEY=$(terraform output -raw b2_worker_app_key 2>/dev/null || echo "")

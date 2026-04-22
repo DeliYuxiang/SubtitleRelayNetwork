@@ -20,10 +20,9 @@
 
 import type { Context } from "hono";
 import type { Bindings } from "../types";
+import { hexToBytes, verifySignature, verifyPoW } from "@srn/client";
 
-export function hexToBytes(hex: string): Uint8Array {
-  return new Uint8Array(hex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
-}
+export { hexToBytes };
 
 /** Generate a stateless salt tied to IP and time. */
 export async function getPoWSalt(
@@ -50,49 +49,7 @@ export async function getPoWSalt(
     .join("");
 }
 
-/** Verify Nonce-based PoW. */
-export async function verifyPoW(
-  pubKeyHex: string,
-  nonce: string,
-  difficulty: number,
-  salt: string,
-): Promise<boolean> {
-  if (difficulty <= 0) return true;
-
-  const encoder = new TextEncoder();
-  const data = encoder.encode(salt + pubKeyHex + nonce);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const hashHex = hashArray
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-
-  return hashHex.startsWith("0".repeat(difficulty));
-}
-
-async function verifyCrypto(
-  pubKeyHex: string,
-  signatureHex: string,
-  message: string,
-): Promise<boolean> {
-  try {
-    const publicKey = await crypto.subtle.importKey(
-      "raw",
-      hexToBytes(pubKeyHex),
-      { name: "NODE-ED25519", namedCurve: "NODE-ED25519" },
-      true,
-      ["verify"],
-    );
-    return await crypto.subtle.verify(
-      "NODE-ED25519",
-      publicKey,
-      hexToBytes(signatureHex),
-      new TextEncoder().encode(message),
-    );
-  } catch {
-    return false;
-  }
-}
+export { verifyPoW };
 
 /** VIP check using simple PubKey whitelist. */
 export function isVip(pubKeyHex: string, whitelist: string): boolean {
@@ -188,7 +145,7 @@ export async function verifySignedRequest(
   }
 
   // 3. Signature Check
-  return (await verifyCrypto(pubKeyHex, signatureHex, canonicalMsg))
+  return (await verifySignature(pubKeyHex, signatureHex, canonicalMsg))
     ? { ok: true, pubKeyHex }
     : {
         ok: false,

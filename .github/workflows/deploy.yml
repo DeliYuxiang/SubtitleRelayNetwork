@@ -26,6 +26,10 @@ on:
 #   emergency-restore    ← runs on failure of any of the three deploy jobs
 # ---------------------------------------------------------------------------
 
+permissions:
+  contents: read
+  packages: read
+
 jobs:
   lint-format:
     runs-on: ubuntu-latest
@@ -43,6 +47,8 @@ jobs:
         run: |
           cd worker
           npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Format Check
         run: cd worker && npm run format:check
@@ -72,6 +78,7 @@ jobs:
     name: Cloudflare Lifecycle
     permissions:
       contents: write
+      packages: read
     outputs:
       mode: ${{ steps.check_mode.outputs.mode }}
       skip: ${{ steps.pre_deploy.outputs.skip }}
@@ -111,6 +118,8 @@ jobs:
         run: |
           cd worker
           npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Determine Deploy Mode
         id: check_mode
@@ -362,6 +371,7 @@ jobs:
       d1_id: ${{ needs.resolve-infra.outputs.d1_id }}
     permissions:
       contents: write
+      packages: read
 
   # -------------------------------------------------------------------------
   # Phase 3: Deploy updated worker (implicitly disables maintenance mode).
@@ -377,6 +387,7 @@ jobs:
     name: Deploy Worker & Update Registry
     permissions:
       contents: write
+      packages: read
     env:
       SRN_D1_NAME:        ${{ needs.resolve-infra.outputs.d1_name }}
       SRN_D1_ID:          ${{ needs.resolve-infra.outputs.d1_id }}
@@ -397,6 +408,8 @@ jobs:
         run: |
           cd worker
           npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate wrangler production config
         run: |
@@ -470,6 +483,8 @@ jobs:
         run: |
           cd worker
           npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate wrangler production config
         id: configure
@@ -530,6 +545,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_NON_INTERACTIVE: "true"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BACKUP_FILE="${{ needs.deploy-or-bootstrap.outputs.backup_file }}"
           PREV_SHA=$(echo "$BACKUP_FILE" | grep -oE "[a-f0-9]{7}" | tail -n 1)
